@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GreyWind 管理面板</title>
+    <style>
+        /* ── Xbox-Style Design System ── */
+        :root {
+            --bg-primary: #0e0e0e;
+            --bg-secondary: #1a1a1a;
+            --bg-card: #242424;
+            --bg-hover: #2d2d2d;
+            --bg-input: #1e1e1e;
+            --xbox-green: #107C10;
+            --xbox-green-bright: #9BF00B;
+            --xbox-green-hover: #0d6b0d;
+            --text-primary: #e8e8e8;
+            --text-secondary: #8a8a8a;
+            --text-muted: #5a5a5a;
+            --border-color: #333;
+            --border-focus: #107C10;
+            --danger: #c0392b;
+            --danger-hover: #a93226;
+            --shadow: 0 4px 20px rgba(0,0,0,0.4);
+            --radius: 8px;
+            --radius-sm: 4px;
+            --font: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+            --sidebar-width: 220px;
+            --header-height: 48px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-primary); }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+
+        html, body { height: 100%; }
+
+        body {
+            font-family: var(--font);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            display: flex;
+            overflow: hidden;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        /* ── Sidebar ── */
+        .sidebar {
+            width: var(--sidebar-width);
+            min-width: var(--sidebar-width);
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            user-select: none;
+        }
+        .sidebar .logo {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            height: var(--header-height);
+        }
+        .sidebar .logo .icon {
+            width: 22px; height: 22px;
+            background: var(--xbox-green);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: 700; color: #fff;
+        }
+        .sidebar .logo span { font-weight: 600; font-size: 14px; letter-spacing: 0.3px; }
+        .sidebar nav { flex: 1; padding: 8px 0; overflow-y: auto; }
+        .sidebar nav a {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 20px; color: var(--text-secondary);
+            text-decoration: none; cursor: pointer; font-size: 13px;
+            border-left: 3px solid transparent;
+            transition: all 0.15s;
+        }
+        .sidebar nav a:hover { color: var(--text-primary); background: var(--bg-hover); }
+        .sidebar nav a.active {
+            color: var(--xbox-green-bright);
+            border-left-color: var(--xbox-green);
+            background: rgba(16, 124, 16, 0.08);
+        }
+        .sidebar nav a .nav-icon { width: 20px; text-align: center; font-size: 15px; }
+        .sidebar .status-bar {
+            padding: 12px 20px;
+            border-top: 1px solid var(--border-color);
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .sidebar .status-bar .dot {
+            display: inline-block; width: 7px; height: 7px;
+            border-radius: 50%; margin-right: 5px;
+        }
+        .sidebar .status-bar .dot.on { background: var(--xbox-green); }
+        .sidebar .status-bar .dot.off { background: var(--danger); }
+
+        /* ── Main Content ── */
+        .main {
+            flex: 1;
+            display: flex; flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .main header {
+            height: var(--header-height);
+            padding: 0 24px;
+            display: flex; align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            flex-shrink: 0;
+        }
+        .main header h2 { font-size: 15px; font-weight: 600; }
+        .main header .actions { display: flex; gap: 8px; align-items: center; }
+        .content {
+            flex: 1; padding: 24px;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        /* ── Components ── */
+        .page { display: none; }
+        .page.active { display: block; }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .card h3 {
+            font-size: 13px; font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 16px;
+        }
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+
+        label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        input[type="text"], input[type="url"], input[type="number"], input[type="password"], select, textarea {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: var(--font);
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        input:focus, textarea:focus, select:focus { border-color: var(--border-focus); }
+        textarea { resize: vertical; min-height: 80px; font-size: 13px; line-height: 1.6; }
+        .field { margin-bottom: 14px; }
+
+        .btn {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 7px 16px; border: none; border-radius: var(--radius-sm);
+            font-size: 13px; font-weight: 500; cursor: pointer;
+            font-family: var(--font);
+            transition: all 0.15s;
+            text-decoration: none; white-space: nowrap;
+        }
+        .btn-primary { background: var(--xbox-green); color: #fff; }
+        .btn-primary:hover { background: var(--xbox-green-hover); }
+        .btn-secondary { background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-color); }
+        .btn-secondary:hover { background: #3a3a3a; }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-danger:hover { background: var(--danger-hover); }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn-icon { padding: 6px 8px; background: transparent; color: var(--text-secondary); border: none; cursor: pointer; font-size: 16px; border-radius: var(--radius-sm); }
+        .btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .toggle {
+            position: relative; display: inline-flex; align-items: center; gap: 8px;
+            cursor: pointer; user-select: none;
+        }
+        .toggle input { display: none; }
+        .toggle .slider {
+            width: 36px; height: 20px; background: #444;
+            border-radius: 10px; position: relative; transition: 0.2s;
+        }
+        .toggle .slider::after {
+            content: ''; position: absolute; top: 2px; left: 2px;
+            width: 16px; height: 16px; background: #888;
+            border-radius: 50%; transition: 0.2s;
+        }
+        .toggle input:checked + .slider { background: var(--xbox-green); }
+        .toggle input:checked + .slider::after { left: 18px; background: #fff; }
+
+        .tag-input {
+            display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+            background: var(--bg-input); border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm); padding: 4px 8px; min-height: 36px;
+        }
+        .tag-input:focus-within { border-color: var(--border-focus); }
+        .tag-input .tag {
+            display: inline-flex; align-items: center; gap: 4px;
+            background: rgba(16, 124, 16, 0.25); color: var(--xbox-green-bright);
+            font-size: 12px; padding: 2px 8px; border-radius: 3px;
+        }
+        .tag-input .tag .remove { cursor: pointer; opacity: 0.6; font-size: 14px; }
+        .tag-input .tag .remove:hover { opacity: 1; }
+        .tag-input input {
+            border: none; outline: none; flex: 1; min-width: 60px;
+            padding: 4px 0; background: transparent; color: inherit;
+            font-size: 13px;
+        }
+        .tag-add-row { display: flex; gap: 4px; margin-top: 4px; }
+
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 3px;
+            font-size: 11px; font-weight: 500;
+        }
+        .badge-green { background: rgba(16, 124, 16, 0.2); color: var(--xbox-green-bright); }
+        .badge-gray { background: #333; color: var(--text-secondary); }
+        .badge-red { background: rgba(192, 57, 43, 0.2); color: #e74c3c; }
+
+        /* ── Group List ── */
+        .group-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            display: flex; align-items: center; justify-content: space-between;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .group-card:hover { background: var(--bg-hover); border-color: #555; }
+        .group-card .info { display: flex; flex-direction: column; gap: 2px; }
+        .group-card .info .gid { font-size: 15px; font-weight: 600; }
+        .group-card .info .meta { font-size: 12px; color: var(--text-muted); }
+        .group-card .actions { display: flex; gap: 6px; align-items: center; }
+
+        /* ── Toast ── */
+        .toast-container {
+            position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .toast {
+            padding: 10px 18px; border-radius: var(--radius-sm);
+            font-size: 13px; color: #fff;
+            opacity: 0; transform: translateY(10px);
+            transition: all 0.3s;
+            min-width: 200px;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.success { background: var(--xbox-green); }
+        .toast.error { background: var(--danger); }
+
+        /* ── Group Detail ── */
+        .breadcrumb {
+            display: flex; align-items: center; gap: 6px;
+            font-size: 12px; color: var(--text-muted); margin-bottom: 16px;
+        }
+        .breadcrumb a { color: var(--text-secondary); cursor: pointer; text-decoration: none; }
+        .breadcrumb a:hover { color: var(--xbox-green-bright); }
+        .breadcrumb .sep { color: var(--text-muted); }
+
+        .prompt-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+        .file-input-wrapper { position: relative; }
+        .file-input-wrapper input[type="file"] {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
+        }
+        .prompt-stats { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
+        /* ── Dashboard ── */
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 20px;
+            text-align: center;
+        }
+        .stat-card .stat-value { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+        .stat-card .stat-label { font-size: 12px; color: var(--text-muted); }
+        .stat-card.online .stat-value { color: var(--xbox-green-bright); }
+        .stat-card.offline .stat-value { color: var(--danger); }
+
+        .raw-editor { font-family: 'Cascadia Code', 'JetBrains Mono', 'Consolas', monospace; font-size: 12px; min-height: 60vh; resize: vertical; tab-size: 2; }
+
+        @media (max-width: 768px) {
+            :root { --sidebar-width: 56px; }
+            .sidebar .logo span, .sidebar nav a span { display: none; }
+            .sidebar nav a { justify-content: center; padding: 12px; }
+            .sidebar .status-bar { display: none; }
+            .main header h2 { font-size: 13px; }
+            .content { padding: 16px; }
+            .card-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ── Sidebar ── -->
+<aside class="sidebar">
+    <div class="logo">
+        <div class="icon">G</div>
+        <span>GreyWind</span>
+    </div>
+    <nav>
+        <a class="active" data-page="dashboard"><span class="nav-icon">📊</span><span>仪表盘</span></a>
+        <a data-page="groups"><span class="nav-icon">💬</span><span>群聊配置</span></a>
+        <a data-page="ai"><span class="nav-icon">🤖</span><span>AI 后端</span></a>
+        <a data-page="perms"><span class="nav-icon">🔒</span><span>权限</span></a>
+        <a data-page="settings"><span class="nav-icon">⚙️</span><span>基础设置</span></a>
+        <a data-page="raw"><span class="nav-icon">📄</span><span>原始 YAML</span></a>
+    </nav>
+    <div class="status-bar" id="sidebar-status">
+        <span class="dot off"></span>检查中...
+    </div>
+</aside>
+
+<!-- ── Main ── -->
+<div class="main">
+    <header>
+        <h2 id="page-title">仪表盘</h2>
+        <div class="actions">
+            <button class="btn btn-secondary btn-sm" onclick="refreshAll()">⟳ 刷新</button>
+            <button class="btn btn-primary btn-sm" onclick="saveConfig()">💾 保存</button>
+        </div>
+    </header>
+    <div class="content" id="content-area">
+
+        <!-- ═══ Dashboard ═══ -->
+        <div class="page active" id="page-dashboard">
+            <div class="card-grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));">
+                <div class="stat-card" id="stat-bridge"><div class="stat-value">—</div><div class="stat-label">桥接</div></div>
+                <div class="stat-card" id="stat-img"><div class="stat-value">—</div><div class="stat-label">图床</div></div>
+                <div class="stat-card" id="stat-groups"><div class="stat-value">—</div><div class="stat-label">已配群聊</div></div>
+                <div class="stat-card" id="stat-oc"><div class="stat-value">—</div><div class="stat-label">AI 后端</div></div>
+            </div>
+
+            <div class="card" style="margin-top:16px;">
+                <h3>快速操作</h3>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="btn btn-secondary" onclick="switchPage('groups')">管理群聊</button>
+                    <button class="btn btn-secondary" onclick="switchPage('ai')">AI 配置</button>
+                    <button class="btn btn-secondary" onclick="switchPage('raw')">YAML 编辑</button>
+                    <button class="btn btn-danger btn-sm" onclick="restartBridge()">重启桥接</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>运行日志</h3>
+                <div id="live-log" style="font-size:12px;color:var(--text-muted);font-family:monospace;max-height:300px;overflow-y:auto;white-space:pre-wrap;line-height:1.4;">
+                    <span style="color:var(--text-muted)">启动日志查看器...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Groups List ═══ -->
+        <div class="page" id="page-groups">
+            <div id="groups-list"></div>
+            <div style="margin-top:12px;">
+                <button class="btn btn-secondary" onclick="addGroup()">＋ 添加群</button>
+            </div>
+        </div>
+
+        <!-- ═══ Group Detail ═══ -->
+        <div class="page" id="page-group-detail">
+            <div class="breadcrumb">
+                <a onclick="switchPage('groups')">群聊配置</a>
+                <span class="sep">›</span>
+                <span id="detail-gid-display"></span>
+            </div>
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                    <h3 style="margin:0;">群 <span id="detail-gid-label"></span></h3>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <label class="toggle" style="font-size:12px;">
+                            <span style="color:var(--text-secondary)">auto-clear</span>
+                            <input type="checkbox" id="detail-auto-clear">
+                            <span class="slider"></span>
+                        </label>
+                        <label class="toggle" style="font-size:12px;">
+                            <span style="color:var(--text-secondary)">定时色图</span>
+                            <input type="checkbox" id="detail-auto-se-tu">
+                            <span class="slider"></span>
+                        </label>
+                        <button class="btn btn-danger btn-sm" onclick="deleteCurrentGroup()">删除</button>
+                    </div>
+                </div>
+
+                <div class="prompt-actions">
+                    <div class="file-input-wrapper">
+                        <button class="btn btn-secondary btn-sm">📂 导入提示词</button>
+                        <input type="file" id="prompt-file-input" accept=".txt,.md" onchange="loadPromptFile(event)">
+                    </div>
+                    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('detail-prompt').value='';updatePromptStats()">清空</button>
+                </div>
+                <div class="field">
+                    <label>系统提示词</label>
+                    <textarea id="detail-prompt" rows="12" oninput="updatePromptStats()" style="min-height:200px;"></textarea>
+                    <div class="prompt-stats">
+                        <span id="prompt-chars">0</span> 字,
+                        <span id="prompt-lines">0</span> 行
+                        <span id="prompt-source" style="margin-left:12px;"></span>
+                    </div>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:8px;">
+                    <button class="btn btn-primary" onclick="saveGroupDetail()">保存此群配置</button>
+                    <button class="btn btn-secondary" onclick="switchPage('groups')">返回列表</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ AI Backend ═══ -->
+        <div class="page" id="page-ai">
+            <div class="card">
+                <h3>OpenClaw</h3>
+                <div class="field">
+                    <label class="toggle">
+                        <span>启用 OpenClaw</span>
+                        <input type="checkbox" id="oc_enabled">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div id="oc-fields">
+                    <div class="field"><label>Agent ID</label><input type="text" id="oc_agent_id"></div>
+                    <div class="field"><label>API URL</label><input type="url" id="oc_api_url" placeholder="http://127.0.0.1:18789/v1/chat/completions"></div>
+                    <div class="field"><label>Auth Token</label><input type="password" id="oc_auth_token"></div>
+                </div>
+            </div>
+            <div class="card">
+                <h3>SiliconFlow</h3>
+                <div class="field"><label>聊天模型</label><input type="text" id="sf_chat_model" placeholder="Qwen/Qwen2.5-14B-Instruct"></div>
+            </div>
+            <div class="card">
+                <h3>AI 生图</h3>
+                <div class="field"><label>每用户每日上限</label><input type="number" id="gen_img_limit" min="1" max="999"></div>
+            </div>
+        </div>
+
+        <!-- ═══ Permissions ═══ -->
+        <div class="page" id="page-perms">
+            <div class="card">
+                <h3>管理员 UID</h3>
+                <div class="tag-input" id="admin_tags"></div>
+                <div class="tag-add-row"><input type="text" id="admin_new" placeholder="输入 UID 按回车"><button class="btn btn-secondary btn-sm" onclick="addTag('admin')">添加</button></div>
+            </div>
+            <div class="card">
+                <h3>自动清空群</h3>
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">名单内的群每次回复后自动清除 session，不保留连续对话</p>
+                <div class="tag-input" id="auto_clear_tags"></div>
+                <div class="tag-add-row"><input type="text" id="auto_clear_new" placeholder="群号"><button class="btn btn-secondary btn-sm" onclick="addTag('auto_clear')">添加</button></div>
+            </div>
+            <div class="card">
+                <h3>禁止操作关键词</h3>
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">非管理员触发时拦截</p>
+                <div class="tag-input" id="forbidden_tags"></div>
+                <div class="tag-add-row"><input type="text" id="forbidden_new" placeholder="输入关键词"><button class="btn btn-secondary btn-sm" onclick="addTag('forbidden')">添加</button></div>
+            </div>
+        </div>
+
+        <!-- ═══ Settings ═══ -->
+        <div class="page" id="page-settings">
+            <div class="card">
+                <h3>通用</h3>
+                <div class="field"><label>机器人名称</label><input type="text" id="bot_name" placeholder="灰风"></div>
+                <div class="field"><label>NapCat WebSocket 地址</label><input type="text" id="napcat_ws_url" placeholder="ws://127.0.0.1:18888"></div>
+            </div>
+            <div class="card">
+                <h3>触发关键词</h3>
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">群聊中提到这些词时机器人会回复</p>
+                <div class="tag-input" id="trigger_tags"></div>
+                <div class="tag-add-row"><input type="text" id="trigger_new" placeholder="输入关键词按回车"><button class="btn btn-secondary btn-sm" onclick="addTag('trigger')">添加</button></div>
+            </div>
+        </div>
+
+        <!-- ═══ Raw YAML ═══ -->
+        <div class="page" id="page-raw">
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">直接编辑 config.yaml。格式错误会导致配置无法加载。</p>
+            <textarea class="raw-editor" id="raw-editor" spellcheck="false"></textarea>
+        </div>
+
+    </div>
+</div>
+
+<!-- ── Toast ── -->
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+//  State
+// ══════════════════════════════════════════════════════════════
+let config = {};
+let currentPage = 'dashboard';
+let currentEditGid = null;  // which group is being edited in detail page
+
+// ══════════════════════════════════════════════════════════════
+//  Navigation
+// ══════════════════════════════════════════════════════════════
+document.querySelectorAll('.sidebar nav a').forEach(a => {
+    a.addEventListener('click', () => switchPage(a.dataset.page));
+});
+
+function switchPage(page, params) {
+    document.querySelectorAll('.sidebar nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    const el = document.getElementById('page-' + page);
+    if (el) el.classList.add('active');
+    currentPage = page;
+
+    const titles = { dashboard:'仪表盘', groups:'群聊配置', 'group-detail':'编辑提示词', ai:'AI 后端', perms:'权限', settings:'基础设置', raw:'原始 YAML' };
+    document.getElementById('page-title').textContent = titles[page] || page;
+
+    // page-specific render
+    if (page === 'groups') renderGroups();
+    if (page === 'raw') loadRawYAML();
+    if (page === 'group-detail' && params) openGroupDetail(params);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Toast
+// ══════════════════════════════════════════════════════════════
+function showToast(msg, type = 'success') {
+    const c = document.getElementById('toast-container');
+    const el = document.createElement('div');
+    el.className = 'toast ' + type + ' show';
+    el.textContent = msg;
+    c.appendChild(el);
+    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3000);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Tag Input
+// ══════════════════════════════════════════════════════════════
+const tagConfigs = {
+    admin:     { inputId:'admin_new',       containerId:'admin_tags',       key:'admin_uids' },
+    auto_clear:{ inputId:'auto_clear_new',  containerId:'auto_clear_tags',  key:'auto_clear_groups' },
+    forbidden: { inputId:'forbidden_new',   containerId:'forbidden_tags',   key:'forbidden_ops' },
+    trigger:   { inputId:'trigger_new',     containerId:'trigger_tags',     key:'trigger_keywords' },
+};
+
+function addTag(name) {
+    const cfg = tagConfigs[name];
+    if (!cfg) return;
+    const input = document.getElementById(cfg.inputId);
+    const v = input.value.trim();
+    if (!v) return;
+    if (!config[cfg.key]) config[cfg.key] = [];
+    if (!config[cfg.key].includes(v)) config[cfg.key].push(v);
+    input.value = '';
+    renderTag(name);
+}
+
+function renderTag(name) {
+    const cfg = tagConfigs[name];
+    if (!cfg) return;
+    const container = document.getElementById(cfg.containerId);
+    const list = config[cfg.key] || [];
+    container.innerHTML = list.map((v, i) =>
+        `<span class="tag">${escHtml(v)} <span class="remove" data-name="${name}" data-i="${i}">✕</span></span>`
+    ).join('');
+    container.querySelectorAll('.remove').forEach(el => {
+        el.addEventListener('click', () => {
+            const n = el.dataset.name;
+            const idx = parseInt(el.dataset.i);
+            const c = tagConfigs[n];
+            if (c && config[c.key]) config[c.key].splice(idx, 1);
+            renderTag(n);
+        });
+    });
+}
+
+// Enter key for tag inputs
+document.querySelectorAll('.tag-add-row input').forEach(inp => {
+    inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const parent = inp.closest('.tag-add-row');
+            const btn = parent.querySelector('button');
+            if (btn) btn.click();
+        }
+    });
+});
+
+// ══════════════════════════════════════════════════════════════
+//  API Calls
+// ══════════════════════════════════════════════════════════════
+async function apiGet(path) {
+    const r = await fetch(path); return r.json();
+}
+async function apiPost(path, data) {
+    const r = await fetch(path, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(data)
+    });
+    return r.json();
+}
+
+async function loadConfig() {
+    try {
+        const j = await apiGet('/api/config');
+        if (!j.ok) { showToast('加载失败: ' + j.error, 'error'); return; }
+        config = j.data;
+        // defaults
+        for (const k of ['trigger_keywords','admin_uids','auto_clear_groups','forbidden_ops']) {
+            if (!config[k]) config[k] = [];
+        }
+        if (!config.groups) config.groups = {};
+        // render all
+        renderTag('trigger'); renderTag('admin'); renderTag('auto_clear'); renderTag('forbidden');
+        renderSettings();
+        renderAI();
+        renderGroups();
+        updateDashboard();
+    } catch(e) { showToast('加载失败: ' + e.message, 'error'); }
+}
+
+async function saveConfig() {
+    // collect form data from current page
+    if (currentPage === 'settings') readSettings();
+    if (currentPage === 'ai') readAI();
+    if (currentPage === 'perms') readPerms();
+    if (currentPage === 'group-detail') readGroupDetail();
+
+    let body = config;
+    let url = '/api/config';
+    let isRaw = false;
+
+    if (currentPage === 'raw') {
+        url = '/api/config/raw';
+        body = { yaml: document.getElementById('raw-editor').value };
+        isRaw = true;
+    }
+
+    try {
+        const j = await apiPost(url, body);
+        showToast(j.message || (j.ok ? '保存成功' : '保存失败'), j.ok ? 'success' : 'error');
+        if (j.ok && !isRaw) {
+            document.getElementById('page-title').textContent = document.getElementById('page-title').textContent.replace(/ \*$/, '') + ' ✓';
+        }
+        if (j.ok) await loadConfig();
+    } catch(e) { showToast('保存失败: ' + e.message, 'error'); }
+}
+
+// Ctrl+S
+document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveConfig(); }
+});
+
+// ══════════════════════════════════════════════════════════════
+//  Settings Page
+// ══════════════════════════════════════════════════════════════
+function renderSettings() {
+    document.getElementById('bot_name').value = config.bot_name || '';
+    document.getElementById('napcat_ws_url').value = (config.napcat && config.napcat.ws_url) || '';
+}
+
+function readSettings() {
+    config.bot_name = document.getElementById('bot_name').value.trim();
+    if (!config.napcat) config.napcat = {};
+    config.napcat.ws_url = document.getElementById('napcat_ws_url').value.trim();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  AI Page
+// ══════════════════════════════════════════════════════════════
+function renderAI() {
+    const oc = config.openclaw || {};
+    document.getElementById('oc_enabled').checked = oc.enabled !== false;
+    document.getElementById('oc_agent_id').value = oc.agent_id || '';
+    document.getElementById('oc_api_url').value = oc.api_url || '';
+    document.getElementById('oc_auth_token').value = oc.auth_token || '';
+    document.getElementById('sf_chat_model').value = (config.siliconflow && config.siliconflow.chat_model) || '';
+    document.getElementById('gen_img_limit').value = (config.gen_img && config.gen_img.daily_limit) ?? 99;
+    toggleOCFields();
+}
+
+function toggleOCFields() {
+    const en = document.getElementById('oc_enabled').checked;
+    document.getElementById('oc-fields').style.opacity = en ? '1' : '0.35';
+    document.getElementById('oc-fields').querySelectorAll('input').forEach(el => el.disabled = !en);
+}
+document.getElementById('oc_enabled').addEventListener('change', toggleOCFields);
+
+function readAI() {
+    if (!config.openclaw) config.openclaw = {};
+    config.openclaw.enabled = document.getElementById('oc_enabled').checked;
+    config.openclaw.agent_id = document.getElementById('oc_agent_id').value.trim();
+    config.openclaw.api_url = document.getElementById('oc_api_url').value.trim();
+    config.openclaw.auth_token = document.getElementById('oc_auth_token').value.trim();
+    if (!config.siliconflow) config.siliconflow = {};
+    config.siliconflow.chat_model = document.getElementById('sf_chat_model').value.trim();
+    if (!config.gen_img) config.gen_img = {};
+    config.gen_img.daily_limit = parseInt(document.getElementById('gen_img_limit').value) || 99;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Permissions Page
+// ══════════════════════════════════════════════════════════════
+function readPerms() {}  // tags are already in config object via addTag/remove
+
+// ══════════════════════════════════════════════════════════════
+//  Groups
+// ══════════════════════════════════════════════════════════════
+function renderGroups() {
+    const container = document.getElementById('groups-list');
+    const groups = config.groups || {};
+    const autoClear = new Set(config.auto_clear_groups || []);
+    const keys = Object.keys(groups);
+    if (keys.length === 0) {
+        container.innerHTML = '<div class="card" style="text-align:center;color:var(--text-muted);padding:40px;">还没有配置群聊，点击下方添加</div>';
+        return;
+    }
+    container.innerHTML = keys.map(gid => {
+        const prompt = groups[gid].prompt || '';
+        const preview = prompt.replace(/\n+/g, ' ').substring(0, 80) + (prompt.length > 80 ? '…' : '');
+        const ac = autoClear.has(gid);
+        return `<div class="group-card" onclick="switchPage('group-detail','${gid}')">
+            <div class="info">
+                <div class="gid">${escHtml(gid)}</div>
+                <div class="meta">${preview || '<span style="color:var(--danger)">未设置提示词</span>'}</div>
+                <div style="display:flex;gap:6px;margin-top:4px;">
+                    <span class="badge ${ac ? 'badge-green' : 'badge-gray'}">${ac ? 'auto-clear' : '持久会话'}</span>
+                    <span class="badge ${groups[gid].auto_se_tu ? 'badge-green' : 'badge-gray'}">${groups[gid].auto_se_tu ? '定时色图' : '手动'}</span>
+                    <span class="badge badge-gray">${prompt.length} 字</span>
+                </div>
+            </div>
+            <div class="actions">
+                <span style="color:var(--text-muted);font-size:18px;">›</span>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function addGroup() {
+    const gid = prompt('输入群号:');
+    if (!gid || !/^\d+$/.test(gid)) return;
+    if (config.groups && config.groups[gid]) { showToast('群 ' + gid + ' 已存在', 'error'); return; }
+    if (!config.groups) config.groups = {};
+    config.groups[gid] = { prompt: 'QQ群聊机器人。像真人聊天，30字以内。' };
+    saveConfig();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Group Detail
+// ══════════════════════════════════════════════════════════════
+function openGroupDetail(gid) {
+    currentEditGid = gid;
+    const group = (config.groups && config.groups[gid]) || { prompt: '' };
+    document.getElementById('detail-gid-display').textContent = '群 ' + gid;
+    document.getElementById('detail-gid-label').textContent = gid;
+    document.getElementById('detail-prompt').value = group.prompt || '';
+    const autoClear = new Set(config.auto_clear_groups || []);
+    document.getElementById('detail-auto-clear').checked = autoClear.has(gid);
+    document.getElementById('detail-auto-se-tu').checked = group.auto_se_tu === true;
+    updatePromptStats();
+}
+
+function updatePromptStats() {
+    const val = document.getElementById('detail-prompt').value;
+    document.getElementById('prompt-chars').textContent = val.length;
+    document.getElementById('prompt-lines').textContent = val.split('\n').length;
+}
+
+function readGroupDetail() {
+    if (!currentEditGid || !config.groups) return;
+    const gid = currentEditGid;
+    config.groups[gid] = config.groups[gid] || {};
+    config.groups[gid].prompt = document.getElementById('detail-prompt').value;
+    config.groups[gid].auto_se_tu = document.getElementById('detail-auto-se-tu').checked || undefined;
+
+    const autoClear = new Set(config.auto_clear_groups || []);
+    if (document.getElementById('detail-auto-clear').checked) {
+        if (!config.auto_clear_groups) config.auto_clear_groups = [];
+        if (!config.auto_clear_groups.includes(gid)) config.auto_clear_groups.push(gid);
+    } else {
+        if (config.auto_clear_groups) config.auto_clear_groups = config.auto_clear_groups.filter(x => x !== gid);
+    }
+}
+
+function saveGroupDetail() {
+    readGroupDetail();
+    saveConfig();
+}
+
+function deleteCurrentGroup() {
+    if (!currentEditGid || !config.groups) return;
+    if (!confirm(`确定删除群 ${currentEditGid} 的配置？`)) return;
+    delete config.groups[currentEditGid];
+    if (config.auto_clear_groups) {
+        config.auto_clear_groups = config.auto_clear_groups.filter(x => x !== currentEditGid);
+    }
+    switchPage('groups');
+    saveConfig();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  File Import (txt/md)
+// ══════════════════════════════════════════════════════════════
+function loadPromptFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (ext !== 'txt' && ext !== 'md') {
+        showToast('仅支持 .txt 和 .md 文件', 'error');
+        event.target.value = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        document.getElementById('detail-prompt').value = e.target.result;
+        updatePromptStats();
+        document.getElementById('prompt-source').textContent = '📄 ' + file.name;
+        showToast('已加载 ' + file.name);
+    };
+    reader.onerror = () => { showToast('读取文件失败', 'error'); };
+    reader.readAsText(file);
+    event.target.value = '';
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Dashboard
+// ══════════════════════════════════════════════════════════════
+async function updateDashboard() {
+    try {
+        const j = await apiGet('/api/status');
+        const d = j.data || {};
+        const bridgeEl = document.getElementById('stat-bridge');
+        const imgEl = document.getElementById('stat-img');
+        bridgeEl.className = 'stat-card ' + (d.bridge_running ? 'online' : 'offline');
+        bridgeEl.querySelector('.stat-value').textContent = d.bridge_running ? '运行中' : '已停止';
+        imgEl.className = 'stat-card ' + (d.img_port_open ? 'online' : 'offline');
+        imgEl.querySelector('.stat-value').textContent = d.img_port_open ? '在线' : '离线';
+
+        document.getElementById('stat-groups').querySelector('.stat-value').textContent =
+            Object.keys(config.groups || {}).length;
+        document.getElementById('stat-oc').querySelector('.stat-value').textContent =
+            (config.openclaw && config.openclaw.enabled !== false) ? 'OpenClaw' : 'SiliconFlow';
+
+        // sidebar status
+        const sb = document.getElementById('sidebar-status');
+        sb.innerHTML = '<span class="dot ' + (d.bridge_running ? 'on' : 'off') + '"></span>' +
+            (d.bridge_running ? '桥接运行中' : '桥接未运行');
+    } catch(e) {
+        document.getElementById('sidebar-status').innerHTML = '<span class="dot off"></span>连接失败';
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Restart
+// ══════════════════════════════════════════════════════════════
+async function restartBridge() {
+    if (!confirm('确定要重启桥接吗？')) return;
+    const j = await apiPost('/api/restart', {});
+    showToast(j.message, j.ok ? 'success' : 'error');
+    setTimeout(updateDashboard, 3000);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Raw YAML
+// ══════════════════════════════════════════════════════════════
+async function loadRawYAML() {
+    try {
+        const j = await apiGet('/api/config/raw');
+        if (j.ok) document.getElementById('raw-editor').value = j.data;
+    } catch(e) { showToast('加载失败', 'error'); }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Utils
+// ══════════════════════════════════════════════════════════════
+function escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function refreshAll() {
+    loadConfig();
+    updateDashboard();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Init
+// ══════════════════════════════════════════════════════════════
+loadConfig();
+updateDashboard();
+setInterval(updateDashboard, 30000);
+</script>
+</body>
+</html>
