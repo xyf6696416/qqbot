@@ -183,6 +183,8 @@
         .btn-secondary:hover { background: #3a3a3a; }
         .btn-danger { background: var(--danger); color: #fff; }
         .btn-danger:hover { background: var(--danger-hover); }
+        .btn-warning { background: #b8860b; color: #fff; border: 1px solid #daa520; }
+        .btn-warning:hover { background: #9a7209; }
         .btn-sm { padding: 4px 10px; font-size: 12px; }
         .btn-icon { padding: 6px 8px; background: transparent; color: var(--text-secondary); border: none; cursor: pointer; font-size: 16px; border-radius: var(--radius-sm); }
         .btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -262,6 +264,7 @@
         }
         .toast.show { opacity: 1; transform: translateY(0); }
         .toast.success { background: var(--xbox-green); }
+        .toast.warning { background: #b8860b; }
         .toast.error { background: var(--danger); }
 
         /* ── Group Detail ── */
@@ -320,6 +323,7 @@
         <a data-page="ai"><span class="nav-icon">🤖</span><span>AI 后端</span></a>
         <a data-page="perms"><span class="nav-icon">🔒</span><span>权限</span></a>
         <a data-page="settings"><span class="nav-icon">⚙️</span><span>基础设置</span></a>
+        <a data-page="compressor"><span class="nav-icon">📦</span><span>图片压缩</span></a>
         <a data-page="raw"><span class="nav-icon">📄</span><span>原始 YAML</span></a>
     </nav>
     <div class="status-bar" id="sidebar-status">
@@ -340,11 +344,12 @@
 
         <!-- ═══ Dashboard ═══ -->
         <div class="page active" id="page-dashboard">
-            <div class="card-grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));">
+            <div class="card-grid" style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));">
+                <div class="stat-card" id="stat-napcat"><div class="stat-value">—</div><div class="stat-label">NapCat QQ</div></div>
                 <div class="stat-card" id="stat-bridge"><div class="stat-value">—</div><div class="stat-label">桥接</div></div>
                 <div class="stat-card" id="stat-img"><div class="stat-value">—</div><div class="stat-label">图床</div></div>
+                <div class="stat-card" id="stat-web"><div class="stat-value">—</div><div class="stat-label">配置后端</div></div>
                 <div class="stat-card" id="stat-groups"><div class="stat-value">—</div><div class="stat-label">已配群聊</div></div>
-                <div class="stat-card" id="stat-oc"><div class="stat-value">—</div><div class="stat-label">AI 后端</div></div>
             </div>
 
             <div class="card" style="margin-top:16px;">
@@ -397,6 +402,17 @@
                         <button class="btn btn-danger btn-sm" onclick="deleteCurrentGroup()">删除</button>
                     </div>
                 </div>
+                <div class="card">
+                    <h3>发图限制</h3>
+                    <div class="field">
+                        <label>每日发图上限</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="number" id="detail-daily-img-limit" min="0" max="9999" value="0" style="width:120px;">
+                            <span style="color:var(--text-muted);font-size:12px;">0 = 不限制</span>
+                            <span id="detail-daily-usage" style="font-size:13px;margin-left:12px;"></span>
+                        </div>
+                    </div>
+                </div>
 
                 <div class="prompt-actions">
                     <div class="file-input-wrapper">
@@ -424,27 +440,30 @@
         <!-- ═══ AI Backend ═══ -->
         <div class="page" id="page-ai">
             <div class="card">
-                <h3>OpenClaw</h3>
-                <div class="field">
-                    <label class="toggle">
-                        <span>启用 OpenClaw</span>
-                        <input type="checkbox" id="oc_enabled">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                <div id="oc-fields">
-                    <div class="field"><label>Agent ID</label><input type="text" id="oc_agent_id"></div>
-                    <div class="field"><label>API URL</label><input type="url" id="oc_api_url" placeholder="http://127.0.0.1:18789/v1/chat/completions"></div>
-                    <div class="field"><label>Auth Token</label><input type="password" id="oc_auth_token"></div>
-                </div>
-            </div>
-            <div class="card">
                 <h3>SiliconFlow</h3>
                 <div class="field"><label>聊天模型</label><input type="text" id="sf_chat_model" placeholder="Qwen/Qwen2.5-14B-Instruct"></div>
             </div>
             <div class="card">
                 <h3>AI 生图</h3>
                 <div class="field"><label>每用户每日上限</label><input type="number" id="gen_img_limit" min="1" max="999"></div>
+                <div class="field"><label>默认分辨率</label>
+                    <select id="gen_img_size">
+                        <option value="auto">auto（默认，由模型决定）</option>
+                        <option value="1024x1024">1024×1024</option>
+                        <option value="1536x1024">1536×1024（横版）</option>
+                        <option value="1024x1536">1024×1536（竖版）</option>
+                        <option value="2048x2048">2048×2048（2K）</option>
+                        <option value="3840x2160">3840×2160（4K）</option>
+                    </select>
+                </div>
+                <div class="field"><label>默认质量</label>
+                    <select id="gen_img_quality">
+                        <option value="auto">auto（默认）</option>
+                        <option value="low">low（低）</option>
+                        <option value="medium">medium（中）</option>
+                        <option value="high">high（高）</option>
+                    </select>
+                </div>
             </div>
         </div>
 
@@ -490,6 +509,100 @@
             <textarea class="raw-editor" id="raw-editor" spellcheck="false"></textarea>
         </div>
 
+        <!-- ═══ Image Compressor ═══ -->
+        <div class="page" id="page-compressor">
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <h3 style="margin:0;">图片压缩扫描</h3>
+                    <label class="toggle" style="font-size:12px;">
+                        <span>启用定时压缩</span>
+                        <input type="checkbox" id="comp-enabled">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">
+                    自动扫描目录中的图片，将超过阈值的文件压缩至阈值以内，原地替换原文件。
+                    每 <span id="comp-interval-display">30</span> 分钟执行一次。
+                </p>
+            </div>
+
+            <div class="card-grid" style="grid-template-columns: 1fr 1fr;">
+                <div class="card">
+                    <h3>压缩配置</h3>
+                    <div class="field">
+                        <label>扫描目录（每行一个）</label>
+                        <textarea id="comp-scan-dirs" rows="4" placeholder="C:\Users\Administrator\Desktop\napcat-greywind\tc\1
+C:\Users\Administrator\Desktop\AI生成"></textarea>
+                    </div>
+                    <div class="field">
+                        <label>压缩阈值</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="number" id="comp-max-size" min="50" max="10240" value="500" style="width:100px;">
+                            <span style="color:var(--text-muted);font-size:12px;">KB（超过此大小将被压缩）</span>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label>执行间隔</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="number" id="comp-interval" min="5" max="1440" value="30" style="width:80px;">
+                            <span style="color:var(--text-muted);font-size:12px;">分钟</span>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:12px;">
+                        <button class="btn btn-primary" onclick="saveCompressorConfig()">💾 保存配置</button>
+                        <button class="btn btn-secondary" onclick="runCompressorNow()">▶ 立即执行</button>
+                    </div>
+                    <hr style="border-color:var(--border-color);margin:16px 0;">
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <button class="btn btn-warning" onclick="renameFiles()">🔄 一键重命名</button>
+                        <span style="font-size:11px;color:var(--text-muted);">将图片按保存时间重命名为日期+序号格式</span>
+                    </div>
+                </div>
+                <div class="card">
+                    <h3>运行状态</h3>
+                    <div id="comp-status-area">
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">状态</span>
+                            <span id="comp-running"><span class="badge badge-gray">就绪</span></span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">上次执行</span>
+                            <span id="comp-last-run">—</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">耗时</span>
+                            <span id="comp-duration">—</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">累计节省</span>
+                            <span id="comp-saved" style="color:var(--xbox-green-bright);">0 MB</span>
+                        </div>
+                        <hr style="border-color:var(--border-color);margin:8px 0;">
+                        <div id="comp-stats" style="display:flex;gap:12px;flex-wrap:wrap;">
+                            <span style="font-size:12px;color:var(--text-muted);">扫描: <b id="comp-scanned" style="color:var(--text-primary);">0</b></span>
+                            <span style="font-size:12px;color:var(--text-muted);">压缩: <b id="comp-compressed" style="color:var(--xbox-green-bright);">0</b></span>
+                            <span style="font-size:12px;color:var(--text-muted);">跳过: <b id="comp-skipped" style="color:var(--text-muted);">0</b></span>
+                            <span style="font-size:12px;color:var(--text-muted);">错误: <b id="comp-errors" style="color:var(--danger);">0</b></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>最近压缩记录</h3>
+                <div id="comp-results" style="font-size:12px;color:var(--text-muted);max-height:300px;overflow-y:auto;">
+                    <span style="color:var(--text-muted)">暂无记录</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>历史运行</h3>
+                <div id="comp-history" style="font-size:12px;max-height:200px;overflow-y:auto;">
+                    <span style="color:var(--text-muted)">暂无历史</span>
+                </div>
+            </div>
+        </div>
+
     </div>
 </div>
 
@@ -503,6 +616,7 @@
 let config = {};
 let currentPage = 'dashboard';
 let currentEditGid = null;  // which group is being edited in detail page
+let dailyUsage = {};  // {gid: count}
 
 // ══════════════════════════════════════════════════════════════
 //  Navigation
@@ -518,12 +632,13 @@ function switchPage(page, params) {
     if (el) el.classList.add('active');
     currentPage = page;
 
-    const titles = { dashboard:'仪表盘', groups:'群聊配置', 'group-detail':'编辑提示词', ai:'AI 后端', perms:'权限', settings:'基础设置', raw:'原始 YAML' };
+    const titles = { dashboard:'仪表盘', groups:'群聊配置', 'group-detail':'编辑提示词', ai:'AI 后端', perms:'权限', settings:'基础设置', compressor:'图片压缩', raw:'原始 YAML' };
     document.getElementById('page-title').textContent = titles[page] || page;
 
     // page-specific render
     if (page === 'groups') renderGroups();
     if (page === 'raw') loadRawYAML();
+    if (page === 'compressor') renderCompressor();
     if (page === 'group-detail' && params) openGroupDetail(params);
 }
 
@@ -620,6 +735,7 @@ async function loadConfig() {
         renderTag('trigger'); renderTag('admin'); renderTag('auto_clear'); renderTag('forbidden');
         renderSettings();
         renderAI();
+        await loadDailyUsage();
         renderGroups();
         updateDashboard();
     } catch(e) { showToast('加载失败: ' + e.message, 'error'); }
@@ -675,39 +791,60 @@ function readSettings() {
 //  AI Page
 // ══════════════════════════════════════════════════════════════
 function renderAI() {
-    const oc = config.openclaw || {};
-    document.getElementById('oc_enabled').checked = oc.enabled !== false;
-    document.getElementById('oc_agent_id').value = oc.agent_id || '';
-    document.getElementById('oc_api_url').value = oc.api_url || '';
-    document.getElementById('oc_auth_token').value = oc.auth_token || '';
     document.getElementById('sf_chat_model').value = (config.siliconflow && config.siliconflow.chat_model) || '';
     document.getElementById('gen_img_limit').value = (config.gen_img && config.gen_img.daily_limit) ?? 99;
-    toggleOCFields();
+    document.getElementById('gen_img_size').value = (config.gen_img && config.gen_img.size) || 'auto';
+    document.getElementById('gen_img_quality').value = (config.gen_img && config.gen_img.quality) || 'auto';
 }
 
-function toggleOCFields() {
-    const en = document.getElementById('oc_enabled').checked;
-    document.getElementById('oc-fields').style.opacity = en ? '1' : '0.35';
-    document.getElementById('oc-fields').querySelectorAll('input').forEach(el => el.disabled = !en);
-}
-document.getElementById('oc_enabled').addEventListener('change', toggleOCFields);
+// 每日发图上限输入变化时更新用量显示
+document.addEventListener('input', e => {
+    if (e.target.id === 'detail-daily-img-limit' && currentEditGid) {
+        updateDailyUsageDisplay(currentEditGid);
+    }
+});
 
 function readAI() {
-    if (!config.openclaw) config.openclaw = {};
-    config.openclaw.enabled = document.getElementById('oc_enabled').checked;
-    config.openclaw.agent_id = document.getElementById('oc_agent_id').value.trim();
-    config.openclaw.api_url = document.getElementById('oc_api_url').value.trim();
-    config.openclaw.auth_token = document.getElementById('oc_auth_token').value.trim();
     if (!config.siliconflow) config.siliconflow = {};
     config.siliconflow.chat_model = document.getElementById('sf_chat_model').value.trim();
     if (!config.gen_img) config.gen_img = {};
     config.gen_img.daily_limit = parseInt(document.getElementById('gen_img_limit').value) || 99;
+    config.gen_img.size = document.getElementById('gen_img_size').value;
+    if (config.gen_img.size === 'auto') delete config.gen_img.size;
+    config.gen_img.quality = document.getElementById('gen_img_quality').value;
+    if (config.gen_img.quality === 'auto') delete config.gen_img.quality;
 }
 
 // ══════════════════════════════════════════════════════════════
 //  Permissions Page
 // ══════════════════════════════════════════════════════════════
 function readPerms() {}  // tags are already in config object via addTag/remove
+
+// ══════════════════════════════════════════════════════════════
+//  Daily Usage
+// ══════════════════════════════════════════════════════════════
+
+async function loadDailyUsage() {
+    try {
+        const j = await apiGet('/api/daily-img-usage');
+        if (j.ok) dailyUsage = j.data || {};
+    } catch(e) { /* ignore */ }
+}
+
+function updateDailyUsageDisplay(gid) {
+    const el = document.getElementById('detail-daily-usage');
+    if (!el) return;
+    const limit = parseInt(document.getElementById('detail-daily-img-limit').value) || 0;
+    const used = dailyUsage[gid] || 0;
+    if (limit > 0) {
+        const pct = Math.min(100, Math.round(used / limit * 100));
+        el.textContent = `已发 ${used} / ${limit} 张 (${pct}%)`;
+        el.style.color = used >= limit ? 'var(--danger)' : 'var(--xbox-green-bright)';
+    } else {
+        el.textContent = used > 0 ? `今日已发 ${used} 张` : '';
+        el.style.color = 'var(--text-secondary)';
+    }
+}
 
 // ══════════════════════════════════════════════════════════════
 //  Groups
@@ -732,6 +869,8 @@ function renderGroups() {
                 <div style="display:flex;gap:6px;margin-top:4px;">
                     <span class="badge ${ac ? 'badge-green' : 'badge-gray'}">${ac ? 'auto-clear' : '持久会话'}</span>
                     <span class="badge ${groups[gid].auto_se_tu ? 'badge-green' : 'badge-gray'}">${groups[gid].auto_se_tu ? '定时色图' : '手动'}</span>
+                    <span class="badge badge-gray">${groups[gid].daily_img_limit ? '每日' + groups[gid].daily_img_limit + '张' : '无限'}</span>
+                    <span class="badge ${dailyUsage[gid] > 0 ? 'badge-green' : 'badge-gray'}">今日 ${dailyUsage[gid] || 0} 张</span>
                     <span class="badge badge-gray">${prompt.length} 字</span>
                 </div>
             </div>
@@ -763,6 +902,8 @@ function openGroupDetail(gid) {
     const autoClear = new Set(config.auto_clear_groups || []);
     document.getElementById('detail-auto-clear').checked = autoClear.has(gid);
     document.getElementById('detail-auto-se-tu').checked = group.auto_se_tu === true;
+    document.getElementById('detail-daily-img-limit').value = group.daily_img_limit ?? 0;
+    updateDailyUsageDisplay(gid);
     updatePromptStats();
 }
 
@@ -778,6 +919,8 @@ function readGroupDetail() {
     config.groups[gid] = config.groups[gid] || {};
     config.groups[gid].prompt = document.getElementById('detail-prompt').value;
     config.groups[gid].auto_se_tu = document.getElementById('detail-auto-se-tu').checked || undefined;
+    const limit = parseInt(document.getElementById('detail-daily-img-limit').value);
+    config.groups[gid].daily_img_limit = (limit > 0) ? limit : undefined;
 
     const autoClear = new Set(config.auto_clear_groups || []);
     if (document.getElementById('detail-auto-clear').checked) {
@@ -835,22 +978,28 @@ async function updateDashboard() {
     try {
         const j = await apiGet('/api/status');
         const d = j.data || {};
-        const bridgeEl = document.getElementById('stat-bridge');
-        const imgEl = document.getElementById('stat-img');
-        bridgeEl.className = 'stat-card ' + (d.bridge_running ? 'online' : 'offline');
-        bridgeEl.querySelector('.stat-value').textContent = d.bridge_running ? '运行中' : '已停止';
-        imgEl.className = 'stat-card ' + (d.img_port_open ? 'online' : 'offline');
-        imgEl.querySelector('.stat-value').textContent = d.img_port_open ? '在线' : '离线';
+        function setStatus(id, running, labelOn='运行中', labelOff='已停止') {
+            const el = document.getElementById(id);
+            el.className = 'stat-card ' + (running ? 'online' : 'offline');
+            el.querySelector('.stat-value').textContent = running ? labelOn : labelOff;
+        }
 
+        setStatus('stat-napcat', d.napcat_running || d.napcat_port_open);
+        setStatus('stat-bridge', d.bridge_running);
+        setStatus('stat-img', d.img_server_running || d.img_port_open, '在线', '离线');
+        setStatus('stat-web', d.config_web_running, '运行中', '异常');
         document.getElementById('stat-groups').querySelector('.stat-value').textContent =
             Object.keys(config.groups || {}).length;
-        document.getElementById('stat-oc').querySelector('.stat-value').textContent =
-            (config.openclaw && config.openclaw.enabled !== false) ? 'OpenClaw' : 'SiliconFlow';
 
-        // sidebar status
+        // sidebar 总体状态
+        const allOk = d.napcat_running && d.bridge_running && (d.img_server_running || d.img_port_open) && d.config_web_running;
         const sb = document.getElementById('sidebar-status');
-        sb.innerHTML = '<span class="dot ' + (d.bridge_running ? 'on' : 'off') + '"></span>' +
-            (d.bridge_running ? '桥接运行中' : '桥接未运行');
+        const parts = [];
+        if (d.napcat_running) parts.push('NapCat ✓');
+        if (d.bridge_running) parts.push('桥接 ✓');
+        if (d.img_port_open) parts.push('图床 ✓');
+        sb.innerHTML = '<span class="dot ' + (allOk ? 'on' : 'off') + '"></span>' +
+            (allOk ? '全部在线' : parts.join(' ') || '部分离线');
     } catch(e) {
         document.getElementById('sidebar-status').innerHTML = '<span class="dot off"></span>连接失败';
     }
@@ -889,6 +1038,193 @@ function refreshAll() {
     loadConfig();
     updateDashboard();
 }
+
+// ══════════════════════════════════════════════════════════════
+//  Image Compressor
+// ══════════════════════════════════════════════════════════════
+
+let compStatusInterval = null;
+
+async function renderCompressor() {
+    await loadCompressorStatus();
+    await loadCompressorConfig();
+    // 每 5 秒刷新状态（如果正在运行）
+    if (compStatusInterval) clearInterval(compStatusInterval);
+    compStatusInterval = setInterval(async () => {
+        const statusDiv = document.getElementById('comp-running');
+        if (statusDiv && statusDiv.textContent.includes('运行中')) {
+            await loadCompressorStatus();
+        }
+    }, 5000);
+}
+
+async function loadCompressorStatus() {
+    try {
+        const j = await apiGet('/api/compressor/status');
+        if (!j.ok) return;
+        const d = j.data;
+
+        document.getElementById('comp-running').innerHTML = d.running
+            ? '<span class="badge badge-green">运行中...</span>'
+            : '<span class="badge badge-gray">就绪</span>';
+
+        document.getElementById('comp-last-run').textContent = d.last_run_end
+            ? new Date(d.last_run_end).toLocaleString('zh-CN')
+            : '—';
+
+        document.getElementById('comp-duration').textContent = d.last_run_duration
+            ? d.last_run_duration + ' 秒'
+            : '—';
+
+        document.getElementById('comp-saved').textContent = d.total_saved_mb
+            ? d.total_saved_mb + ' MB'
+            : '0 MB';
+
+        document.getElementById('comp-scanned').textContent = d.total_scanned;
+        document.getElementById('comp-compressed').textContent = d.total_compressed;
+        document.getElementById('comp-skipped').textContent = d.total_skipped;
+        document.getElementById('comp-errors').textContent = d.total_errors;
+
+        // 最近记录
+        const resultsEl = document.getElementById('comp-results');
+        if (d.last_results && d.last_results.length > 0) {
+            resultsEl.innerHTML = d.last_results.map(r =>
+                `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border-color);font-size:11px;">
+                    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(r.path.split('/').pop() || r.path)}</span>
+                    <span style="width:70px;text-align:right;color:var(--text-muted);">${(r.original_size/1024).toFixed(0)}KB</span>
+                    <span style="width:50px;text-align:center;color:var(--xbox-green-bright);">→</span>
+                    <span style="width:70px;text-align:left;">${(r.final_size/1024).toFixed(0)}KB</span>
+                    <span style="width:60px;text-align:right;color:var(--xbox-green);">-${(r.saved_kb).toFixed(0)}KB</span>
+                    <span style="width:80px;text-align:right;font-size:10px;color:var(--text-muted);">${r.method}</span>
+                </div>`
+            ).join('');
+        } else {
+            resultsEl.innerHTML = '<span style="color:var(--text-muted)">暂无记录</span>';
+        }
+
+        // 历史
+        const histEl = document.getElementById('comp-history');
+        if (d.history && d.history.length > 0) {
+            const items = [...d.history].reverse().slice(0, 20);
+            histEl.innerHTML = items.map(h => {
+                const saved = h.saved_bytes ? (h.saved_bytes / (1024*1024)).toFixed(1) + 'MB' : '—';
+                const time = h.end ? new Date(h.end).toLocaleString('zh-CN') : '?';
+                return `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border-color);font-size:11px;">
+                    <span style="color:var(--text-muted);">${escHtml(time)}</span>
+                    <span>${escHtml(h.summary || '—')}</span>
+                    <span style="color:${h.ok ? 'var(--xbox-green)' : 'var(--danger)'};">${h.ok ? '✓' : '⚠'}</span>
+                </div>`;
+            }).join('');
+        } else {
+            histEl.innerHTML = '<span style="color:var(--text-muted)">暂无历史</span>';
+        }
+    } catch(e) {
+        console.error('加载压缩状态失败', e);
+    }
+}
+
+async function loadCompressorConfig() {
+    try {
+        const j = await apiGet('/api/compressor/config');
+        if (!j.ok) return;
+        const d = j.data;
+
+        document.getElementById('comp-enabled').checked = d.enabled;
+        if (d.scan_dirs && d.scan_dirs.length > 0) {
+            document.getElementById('comp-scan-dirs').value = d.scan_dirs.join('\n');
+        }
+        document.getElementById('comp-max-size').value = d.max_size_kb;
+        document.getElementById('comp-interval').value = d.interval_minutes;
+        document.getElementById('comp-interval-display').textContent = d.interval_minutes;
+        // 调度器实际状态
+        if (d.scheduler) {
+            document.getElementById('comp-running').innerHTML = d.scheduler.enabled
+                ? '<span class="badge badge-green">定时运行中</span>'
+                : '<span class="badge badge-gray">已暂停</span>';
+        }
+    } catch(e) {
+        console.error('加载压缩配置失败', e);
+    }
+}
+
+async function saveCompressorConfig() {
+    const dirs = document.getElementById('comp-scan-dirs').value
+        .split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    const maxSize = parseInt(document.getElementById('comp-max-size').value) || 500;
+    const interval = parseInt(document.getElementById('comp-interval').value) || 30;
+    const enabled = document.getElementById('comp-enabled').checked;
+
+    try {
+        const j = await apiPost('/api/compressor/config', {
+            enabled,
+            scan_dirs: dirs,
+            max_size_kb: maxSize,
+            interval_minutes: interval,
+        });
+        showToast(j.message || (j.ok ? '保存成功' : '保存失败'), j.ok ? 'success' : 'error');
+        if (j.ok) {
+            document.getElementById('comp-interval-display').textContent = interval;
+            await loadCompressorStatus();
+        }
+    } catch(e) {
+        showToast('保存失败: ' + e.message, 'error');
+    }
+}
+
+async function runCompressorNow() {
+    try {
+        const j = await apiPost('/api/compressor/run', {});
+        showToast(j.message || '已启动', j.ok ? 'success' : 'error');
+        if (j.ok) {
+            // 立即刷新状态
+            setTimeout(loadCompressorStatus, 1000);
+        }
+    } catch(e) {
+        showToast('启动失败: ' + e.message, 'error');
+    }
+}
+
+async function renameFiles() {
+    if (!confirm('确定要一键重命名扫描目录中的图片吗？\n\n文件将按修改时间重命名为 年月日_时分秒_序号 格式。\n此操作不可撤销！')) return;
+
+    const btn = event.target;
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ 重命名中...';
+
+    try {
+        const j = await apiPost('/api/compressor/rename', {});
+        if (!j.ok) {
+            showToast('重命名失败: ' + (j.error || '未知错误'), 'error');
+            return;
+        }
+        const d = j.data;
+        const parts = [`重命名完成：${d.renamed} 个成功`];
+        if (d.skipped > 0) parts.push(`${d.skipped} 个跳过（已命名）`);
+        if (d.errors.length > 0) parts.push(`${d.errors.length} 个失败`);
+        showToast(parts.join('，') + (j.message ? ' — ' + j.message : ''), d.errors.length > 0 ? 'warning' : 'success');
+
+        // 如果重命名了文件，刷新状态
+        if (d.renamed > 0) {
+            await loadCompressorStatus();
+        }
+    } catch(e) {
+        showToast('重命名失败: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+    }
+}
+
+// 离开 compressor 页时清理定时器
+document.querySelectorAll('.sidebar nav a').forEach(a => {
+    a.addEventListener('click', () => {
+        if (compStatusInterval && a.dataset.page !== 'compressor') {
+            clearInterval(compStatusInterval);
+            compStatusInterval = null;
+        }
+    });
+});
 
 // ══════════════════════════════════════════════════════════════
 //  Init

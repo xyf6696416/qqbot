@@ -11,8 +11,8 @@ from urllib.parse import unquote
 
 # ================= 配置区 =================
 PORT = 7777  # 服务端口
-IMAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tc")  # 图片根目录
-ALLOWED_EXT = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')  # 允许的文件类型
+IMAGE_DIR = rf"C:\Users\Administrator\Desktop\napcat-greywind\tc"  # 图片根目录（使用原始字符串避免转义问题）
+ALLOWED_EXT = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.mp4')  # 允许的文件类型
 
 
 # ==========================================

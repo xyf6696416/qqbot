@@ -5,7 +5,7 @@ GreyWind x NapCat Bridge v6.3
 - Reference caching before routing
 - Per-intent prompt splitting
 - Group message context (max 200)
-- Vision pipeline: SF raw + OpenClaw polish
+- Vision pipeline: SF raw
 - Image compression (auto-compress >500KB on save_img)
 - AI image generation (12AI GPT-Image-2)
 

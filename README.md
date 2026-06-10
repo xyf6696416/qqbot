@@ -34,8 +34,8 @@ napcat-greywind/
 └── README.md
 ```
 
-- **NapCat**：`ncp/` 目录
-- **图床**：`tc/1/`（HTTP 7777）
+- **NapCat**：`C:\Users\Administrator\Desktop\napcat-greywind\ncp\`
+- **图床**：`C:\Users\Administrator\Desktop\napcat-greywind\tc\1\`（HTTP 7777）
 - **选图脚本**：`tc/pick_fwd_image.py`
 
 ---
@@ -45,23 +45,23 @@ napcat-greywind/
 ### 1. 消息收发
 - 通过 NapCat WebSocket（127.0.0.1:18888）接收 QQ 群消息
 - 转发到 OpenClaw API（127.0.0.1:18789）获取 AI 回复
-- 群号白名单：在 `config.yaml` 中配置
+- 群号白名单：`1026442086`、`788327119`、`1037926595`
 
 ### 2. 意图路由（`intent_router.py`）
 - `IntentRouter.keyword_route()` 按优先级匹配：save_img > send_img > gen_img > vision > chat
 - 低置信度走 SiliconFlow Qwen2.5-7B 兜底分类
-- SRC_MAP 映射发图关键词到 `~/Desktop/转发图片/` 子文件夹
+- SRC_MAP 映射发图关键词到 `桌面\转发图片\` 子文件夹
 - 不指定 src 时随机选一个子文件夹
 
 ### 3. 发图流水线
 - 流程：`pick_fwd_image.py 选图 → 复制到 tc/1/ → send_images_batch.py 批量发送`
 - 选图脚本：`tc/pick_fwd_image.py`（带去重状态 `.pick_fwd_state.json`）
-- 图片来源：`~/Desktop/转发图片/`
+- 图片来源：`桌面\转发图片\`（泡泡不走 `Z:\jellfin\插画`）
 - 一批最多 6 张，批次间隔 5s
 
 ### 4. 存图流水线
 - 自动压缩 >500KB 图片（PNG→JPG）
-- 复制到 `~/Desktop/转发图片/<分类>/`
+- 复制到 `桌面\转发图片\<分类>\`
 - 不指定分类默认存到「其他」
 
 ### 5. 识图流水线（用户发图时）
@@ -82,7 +82,7 @@ napcat-greywind/
 
 ### 8. 群聊触发器
 - @机器人 → 回复
-- 命中 `trigger_keywords`（在 `config.yaml` 中配置）→ 回复
+- 命中 `trigger_keywords`（当前：`泡泡`）→ 回复
 
 ---
 
@@ -93,11 +93,11 @@ napcat-greywind/
 - 每个群可独立配置 prompt
 
 ### auto-clear 机制
-- 在 `config.yaml` → `auto_clear_groups` 中配置
+- 当前 auto-clear 群：`788327119`
 - 每次回复后自动删 OC session（不保留连续对话）
 
 ### 权限系统
-- `admin_uids`：在 `config.yaml` 中配置（超级管理员）
+- `admin_uids`：`653020384`（超级管理员）
 - `forbidden_ops`：非管理员禁止的操作（删/删除/重置/清空记录等）
 
 ### 生图日限
@@ -126,7 +126,7 @@ mihomo.exe                     ← 代理（HTTP 7890）
 
 ### 重启桥接
 ```powershell
-cd <项目目录>
+cd C:\Users\Administrator\Desktop\napcat-greywind
 # bridge.py 启动时会自动 kill 旧进程
 python bridge.py
 ```
@@ -148,7 +148,7 @@ netstat -ano | Select-String "18888.*ESTAB"
 
 ### 2026-06-05 (v6.3) — 模块化拆分 + 健壮性
 - **模块拆分**：bridge.py 拆分为 config / intent_router / image_utils / gen_img / bot
-- **Bug 修复**：close 方法缩进错误、重复 @staticmethod、控制台 UTF-8 编码
+- **Bug 修复**：close 方法缩进错误（之前不在 Bot 类内）、重复 @staticmethod、控制台 UTF-8 编码
 - **httpx 连接复用**：OC 和 SF 各自复用 AsyncClient，减少 TCP 握手
 - **OC 5xx 重试**：遇到 500 错误自动重试 1 次
 - **图片压缩异步化**：compress_image 用 asyncio.to_thread 包装，不再阻塞事件循环
@@ -159,9 +159,10 @@ netstat -ano | Select-String "18888.*ESTAB"
 ### 2026-06-04 (v6.2)
 - **session key 改为群级**：`v3_group_{gid}`（之前 `v3_group_{gid}_user_{uid}` 各人独立）
 - **system prompt 加群号**：开头 `当前QQ群号: {gid}`，修复发图发错群
-- **选图脚本修正**：改用 `pick_fwd_image.py`（搜 `~/Desktop/转发图片/`）
+- **选图脚本修正**：改用 `pick_fwd_image.py`（搜 `桌面\转发图片\`）
 - **缺省 src**：不指定 src 时随机选一个子文件夹
 - **生图 prompt 逻辑**：默认去掉触发词直接当 prompt
+- **auto_clear 调整**：`1037926595` 移出 auto_clear 名单
 
 ### 2026-06-03 (v6.1)
 - 引用的单图路由、图片压缩、识图修复、auto-clear 修复、/ 命令触发修复

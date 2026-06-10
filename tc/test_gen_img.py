@@ -1,7 +1,7 @@
 """测试 12AI API - 用更长超时"""
 import json, http.client, time, base64
 
-KEY = "YOUR_12AI_API_KEY"
+KEY = "sk-q654BxOLHiKEb6JhjEvQUCNyl3I9nhCU50RG3mghgUPX4wBD"
 payload = {"model":"gpt-image-2","prompt":"cat","n":1,"size":"256x256","quality":"standard","response_format":"b64_json"}
 body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 auth_val = ("Bearer " + KEY).encode("utf-8").decode("latin-1")

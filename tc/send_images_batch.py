@@ -1,6 +1,6 @@
 """
 批量图片发送工具 — 多张图一次性发送（同一条消息）
-用法: python send_images_batch.py --group GROUP_ID --urls url1,url2
+用法: python send_images_batch.py --group 1026442086 --urls url1,url2
 """
 
 import asyncio, json, sys, argparse

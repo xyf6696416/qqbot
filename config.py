@@ -14,12 +14,6 @@ with open(os.path.join(BASE_DIR, "config.yaml"), "r", encoding="utf-8") as f:
 # ── NapCat ──
 NAPCAT_WS = cfg["napcat"]["ws_url"]
 
-# ── OpenClaw ──
-OC_ENABLED = cfg.get("openclaw", {}).get("enabled", True)
-OC_API = cfg["openclaw"]["api_url"]
-OC_TOKEN = cfg["openclaw"]["auth_token"]
-AGENT_ID = cfg["openclaw"].get("agent_id", "default")
-
 # ── Trigger ──
 TRIGGER_KW = cfg.get("trigger_keywords", [])
 
@@ -31,11 +25,11 @@ AUTO_CLEAR_GROUPS = set(cfg.get("auto_clear_groups", []))
 AUTO_SE_TU_GROUPS = {gid for gid, gcfg in GROUP_PROMPTS.items() if gcfg.get("auto_se_tu")}
 
 # ── 权限 ──
-ADMIN_UIDS = cfg.get("admin_uids", ["YOUR_ADMIN_QQ"])
+ADMIN_UIDS = cfg.get("admin_uids", ["653020384"])
 FORBIDDEN_OPS = cfg.get("forbidden_ops", ["删", "删除", "移除", "重置", "清空记录", "清空已发", "reset", "rm ", "del "])
 
 # ── SiliconFlow ──
-SF_KEY = "YOUR_SILICONFLOW_API_KEY"
+SF_KEY = "sk-ydqpvfaohcftjbxwpzpyzqcpdwweqvgdddkcavgmvxajkmja"
 SF_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 SF_CHAT_MODEL = cfg.get("siliconflow", {}).get("chat_model", "Qwen/Qwen2.5-14B-Instruct")
 

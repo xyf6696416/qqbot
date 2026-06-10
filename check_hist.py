@@ -13,7 +13,7 @@ async def test():
     # 获取群最新消息
     await ws.send_str(json.dumps({
         "action": "get_group_msg_history",
-        "params": {"group_id": GROUP_ID, "count": 15},
+        "params": {"group_id": 788327119, "count": 15},
         "echo": "hist"
     }))
     

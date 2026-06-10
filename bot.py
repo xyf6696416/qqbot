@@ -14,24 +14,28 @@ import random
 import re
 import shutil
 import sys
+import threading
 import time
 import unicodedata
 import uuid
 from collections import deque
 from datetime import datetime
 
+import yaml
+
 import httpx
 from aiohttp import ClientSession, WSMsgType
 
 from config import (
-    NAPCAT_WS, OC_API, OC_TOKEN, AGENT_ID, OC_ENABLED,
+    NAPCAT_WS,
     TRIGGER_KW, ADMIN_UIDS, FORBIDDEN_OPS,
     GROUP_PROMPTS, DEFAULT_PROMPT, AUTO_CLEAR_GROUPS, AUTO_SE_TU_GROUPS,
     SF_KEY, SF_MODEL, SF_CHAT_MODEL, IMG_PORT, IMG_URL, IMG_STORAGE,
     MAX_CONTEXT, MAX_IMAGE_SIZE, GEN_IMG_DIR, GEN_IMG_DAILY_LIMIT,
 )
 from intent_router import IntentRouter, RefContext
-from image_utils import compress_image, ImageServer
+from image_utils import ImageServer
+from image_compressor import scan_and_compress as _trigger_compress
 from gen_img import gen_image, _log_gen_img, _get_gen_img_key
 
 log = logging.getLogger("gw")
@@ -48,6 +52,8 @@ class Bot:
         self.nicknames = {}
         # 生图额度跟踪: {"YYYY-MM-DD|gid|uid": count}
         self.gen_img_usage = {}
+        # 每日发图计数: {"YYYY-MM-DD|gid": count}
+        self.daily_img_usage = {}
         # Group message context: {group_id: deque([(user_id, text, ts), ...])}
         self.context = {}
         # 消息队列：每个群一个队列，保证按序处理
@@ -58,7 +64,6 @@ class Bot:
         # 定时涩图任务：{group_id: asyncio.Task}
         self._se_tu_tasks: dict[str, asyncio.Task] = {}
         # 复用 httpx 客户端（连接池）
-        self._oc_client = httpx.AsyncClient(timeout=180, proxy=None)
         self._sf_client = httpx.AsyncClient(timeout=60)
         # 优雅关闭标志
         self._shutdown = False
@@ -67,6 +72,17 @@ class Bot:
         # 发送队列（每条消息间隔 3 秒，防封）
         self.send_queue = asyncio.Queue()
         self._send_worker_task = None
+
+        # 配置文件缓存（支持热加载）
+        self._group_configs = GROUP_PROMPTS
+        self._auto_clear_groups = AUTO_CLEAR_GROUPS
+        self._trigger_kw = TRIGGER_KW
+        self._admin_uids = ADMIN_UIDS
+        self._forbidden_ops = FORBIDDEN_OPS
+
+        # 标记热加载配置可用（_reload_config 已定义）
+        if not hasattr(self, '_reload_config'):
+            pass
 
     def _cleanup_tc_files(self):
         """清理 tc/1/ 中超过 24 小时的临时文件"""
@@ -133,10 +149,10 @@ class Bot:
             return None
 
     def _is_admin(self, uid):
-        return str(uid) in ADMIN_UIDS
+        return str(uid) in (getattr(self, '_admin_uids', ADMIN_UIDS))
 
     def _has_forbidden_op(self, text):
-        for kw in FORBIDDEN_OPS:
+        for kw in (getattr(self, '_forbidden_ops', FORBIDDEN_OPS)):
             if kw in text:
                 return True
         return False
@@ -148,6 +164,10 @@ class Bot:
             return
         if data.get("self_id"):
             self.self_id = data.get("self_id")
+
+        # 检查热加载标记（每条消息处理前，降低延迟）
+        self._check_reload_flag()
+
         if data.get("echo"):
             return
         if data.get("post_type") == "message" and data.get("message_type") == "group":
@@ -200,7 +220,11 @@ class Bot:
                     msg_parts.append("[图片/视频]")
                     url_m = re.search(r'url=([^,\]]+)', raw_content)
                     if url_m and fwd_img_urls is not None:
-                        fwd_img_urls.append(url_m.group(1))
+                        url = url_m.group(1)
+                        if url.startswith("http"):
+                            fwd_img_urls.append(url)
+                        else:
+                            log.info("FORWARD_CQ_VIDEO_SKIP: url=%s", url[:80])
             elif isinstance(raw_content, list):
                 for seg in raw_content:
                     st2 = seg.get("type", "")
@@ -210,8 +234,16 @@ class Bot:
                     elif st2 == "image":
                         msg_parts.append("[图片]")
                         u2 = sd2.get("url", "")
-                        if u2 and fwd_img_urls is not None:
+                        if u2 and u2.startswith("http") and fwd_img_urls is not None:
                             fwd_img_urls.append(u2)
+                    elif st2 == "video":
+                        msg_parts.append("[视频]")
+                        u2 = sd2.get("url") or sd2.get("file") or ""
+                        if u2:
+                            if fwd_img_urls is not None:
+                                fwd_img_urls.append(u2)
+                        else:
+                            log.info("FORWARD_VIDEO_SKIP: data=%s", str(sd2)[:200])
                     elif st2 == "face":
                         msg_parts.append("[表情]")
                     elif st2 == "at":
@@ -235,7 +267,29 @@ class Bot:
 
         return "\n".join(lines)
 
-    def _cache_fwd_images(self, urls):
+    @staticmethod
+    def _detect_image_ext(path):
+        """读取文件头魔数判断真实图片格式。"""
+        try:
+            with open(path, "rb") as f:
+                head = f.read(12)
+            if head[:6] in (b"GIF87a", b"GIF89a"):
+                return ".gif"
+            if head[:8] == b"\x89PNG\r\n\x1a\n":
+                return ".png"
+            if head[:2] == b"\xff\xd8":
+                return ".jpg"
+            if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+                return ".webp"
+            if head[:2] == b"BM":
+                return ".bmp"
+            if head[4:8] == b"ftyp":
+                return ".mp4"
+        except Exception:
+            pass
+        return ".jpg"  # 默认
+
+    async def _cache_fwd_images(self, urls):
         if not urls:
             return []
         cached = []
@@ -245,14 +299,43 @@ class Bot:
         for idx, url in enumerate(urls, 1):
             try:
                 import urllib.request
-                ext = ".jpg"
-                for e in [".png", ".gif", ".webp", ".bmp", ".jpeg"]:
-                    if e in url.lower():
-                        ext = e
-                        break
+                tmp = os.path.join(img_dir, f"tmp_{now}_{idx}")
+                if url.startswith("http"):
+                    urllib.request.urlretrieve(url, tmp)
+                elif os.path.isfile(url):
+                    # 本地文件路径（如转发视频缓存），直接复制
+                    import shutil
+                    shutil.copy2(url, tmp)
+                else:
+                    # 本地路径但文件不存在 → 尝试 NapCat HTTP API 解析文件哈希
+                    fname_only = os.path.basename(url)
+                    resolved = False
+                    try:
+                        async with httpx.AsyncClient() as hc:
+                            resp = await hc.post(
+                                "http://127.0.0.1:5283/api/get_file",
+                                json={"file": fname_only},
+                                timeout=5)
+                            if resp.status_code == 200:
+                                data = resp.json().get("data", {})
+                                file_url = data.get("url") or data.get("file", "")
+                                if file_url and file_url.startswith("http"):
+                                    urllib.request.urlretrieve(file_url, tmp)
+                                    resolved = True
+                                elif file_url and os.path.isfile(file_url):
+                                    shutil.copy2(file_url, tmp)
+                                    resolved = True
+                    except Exception as api_e:
+                        log.info("CACHE_IMG_API_FAIL: url=%s err=%s",
+                                 url[:40], str(api_e)[:60])
+                    if not resolved:
+                        log.info("CACHE_IMG_SKIP: url=%s not available", url[:50])
+                        continue
+                ext = self._detect_image_ext(tmp)
                 fname = f"fwd_{now}_{idx}{ext}"
                 dst = os.path.join(img_dir, fname)
-                urllib.request.urlretrieve(url, dst)
+                if tmp != dst:
+                    os.rename(tmp, dst)
                 cached.append(dst)
             except Exception as e:
                 log.warning("CACHE_IMG_ERR: url=%s err=%s", url[:50], str(e)[:100])
@@ -261,8 +344,9 @@ class Bot:
     def _extract_imgs(self, segs):
         urls = []
         for s in segs:
-            if s.get("type") == "image":
-                u = s.get("data", {}).get("url", "")
+            s_type = s.get("type")
+            if s_type in ("image", "video"):
+                u = s.get("data", {}).get("url") or s.get("data", {}).get("file") or ""
                 if u:
                     urls.append(u)
         return urls
@@ -282,35 +366,6 @@ class Bot:
         if gs not in self.context:
             self.context[gs] = deque(maxlen=MAX_CONTEXT)
         self.context[gs].append((uid, text, time.time()))
-
-    # ─── OpenClaw / SiliconFlow 调用 ────────────────────
-
-    async def _call_oc(self, system_prompt, context_str, user_text, session_key, retry=True):
-        msgs = [{"role": "system", "content": system_prompt}]
-        if context_str:
-            msgs.append({"role": "system", "content": f"【近期群消息上下文】\n{context_str}"})
-        tagged = f"[qq_bridge] {user_text}" if not user_text.startswith("[qq_bridge]") else user_text
-        msgs.append({"role": "user", "content": tagged})
-        payload = {
-            "model": f"openclaw/{AGENT_ID}",
-            "messages": msgs,
-            "user": session_key,
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {OC_TOKEN}",
-        }
-        try:
-            r = await self._oc_client.post(OC_API, json=payload, headers=headers)
-            if r.status_code >= 500 and retry:
-                log.warning("OC 5xx retry: status=%d", r.status_code)
-                await asyncio.sleep(2)
-                r = await self._oc_client.post(OC_API, json=payload, headers=headers)
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            log.error("OC err: %s", str(e)[:300])
-            return None
 
     async def _call_sf_chat(self, system_prompt, context_str, user_text):
         """通过 SiliconFlow 聊天 API 生成回复（OC 关闭时替代）"""
@@ -373,7 +428,18 @@ class Bot:
         msg = data.get("message", [])
         if uid == str(self.self_id):
             return
-        if str(gid) not in GROUP_PROMPTS:
+
+        # 管理员 /add 命令：不受白名单限制
+        raw_text = ""
+        for s in msg:
+            if s.get("type") == "text":
+                raw_text += s.get("data", {}).get("text", "")
+        if str(uid) in (getattr(self, '_admin_uids', ADMIN_UIDS)) and raw_text.strip().lower() == "/add":
+            log.info("CMD_ADD_BYPASS: gid=%s uid=%s", gid, uid)
+            await self._handle_add_group(gid, uid)
+            return
+
+        if str(gid) not in (getattr(self, '_group_configs', GROUP_PROMPTS)):
             log.info("GROUP_NOT_IN_WHITELIST: gid=%s", gid)
             return
 
@@ -403,6 +469,12 @@ class Bot:
                 if u:
                     img_urls.append(u)
                     text += " [图片]"
+            elif st == "video":
+                u = sd.get("url", "")
+                if u and u.startswith("http"):
+                    img_urls.append(u)
+                    text += " [视频]"
+                log.info("VIDEO_DEBUG: gid=%s data=%s", gid, str(sd)[:300])
             elif st == "forward":
                 fid = sd.get("id", "")
                 log.info("FORWARD_DEBUG: fid=%s text_before=%s", fid, text[:50] if text else "(empty)")
@@ -417,7 +489,7 @@ class Bot:
                             forward_text = await self._parse_forward_nodes(nodes, fwd_imgs)
                             text += "\n【合并转发】\n" + forward_text
                             if fwd_imgs:
-                                cached = self._cache_fwd_images(fwd_imgs)
+                                cached = await self._cache_fwd_images(fwd_imgs)
                                 _all_cached_paths.extend(cached)
                                 text += f"\n(转发中包含{len(fwd_imgs)}张图片，已缓存到图床)"
 
@@ -429,7 +501,7 @@ class Bot:
                 q_imgs = self._extract_imgs(q_msg)
                 img_urls = q_imgs + img_urls
                 if q_imgs:
-                    q_img_cached = self._cache_fwd_images(q_imgs)
+                    q_img_cached = await self._cache_fwd_images(q_imgs)
                     _all_cached_paths.extend(q_img_cached)
                 quoted_forward = None
                 for seg in q_msg:
@@ -445,7 +517,7 @@ class Bot:
                             qf_imgs = []
                             qf_text = await self._parse_forward_nodes(nodes, qf_imgs)
                             if qf_imgs:
-                                qf_cached = self._cache_fwd_images(qf_imgs)
+                                qf_cached = await self._cache_fwd_images(qf_imgs)
                                 _all_cached_paths.extend(qf_cached)
                             text = (
                                 f"[引用合并转发]\n{qf_text}\n"
@@ -480,17 +552,29 @@ class Bot:
                 reply = True
 
         if not reply:
-            for kw in TRIGGER_KW:
+            for kw in (getattr(self, '_trigger_kw', TRIGGER_KW)):
                 if kw in text:
                     reply = True
                     log.info("TRIGGERED_BY_KEYWORD: kw=%s", kw)
                     break
 
-        # st 生图触发（行首 st + 非英文字母，兼容中文无空格）
+        # 管理员 / 命令直接触发（无需关键词前缀）
+        if not reply and text.startswith("/") and str(uid) in (getattr(self, '_admin_uids', ADMIN_UIDS)):
+            reply = True
+            log.info("TRIGGERED_BY_ADMIN_CMD: gid=%s cmd=%s", gid, text.split()[0])
+
+        # /生图 触发
         if not reply:
-            if re.search(r"^st(?![a-zA-Z])", stripped, re.IGNORECASE):
+            if re.search(r"/生图", stripped):
                 reply = True
-                log.info("TRIGGERED_BY_ST: gid=%s text=%s", gid, stripped[:50])
+                log.info("TRIGGERED_BY_SHENG_TU: gid=%s text=%s", gid, stripped[:50])
+
+        # GIF 触发（在进入队列前检查，让消息能到达 _process_queue_item 的 GIF 处理逻辑）
+        if not reply:
+            gif_lower = stripped.lower()
+            if gif_lower == "gif 列表" or gif_lower.startswith("gif "):
+                reply = True
+                log.info("TRIGGERED_BY_GIF: gid=%s text=%s", gid, stripped[:50])
 
         if text.startswith("/") and reply:
             log.info("CMD_PASSTHROUGH: gid=%s cmd=%s", gid, text.split()[0])
@@ -504,7 +588,7 @@ class Bot:
 
         # 权限检查
         if not self._is_admin(uid):
-            for kw in FORBIDDEN_OPS:
+            for kw in (getattr(self, '_forbidden_ops', FORBIDDEN_OPS)):
                 if kw in text:
                     log.info("PERMISSION_BLOCK: uid=%s text=%s matched_kw=%s", uid, text[:60], kw)
                     await self._enqueue_send("send_group_msg", {
@@ -515,6 +599,18 @@ class Bot:
                         ],
                     })
                     return
+
+        # 如果文字含存图/收图关键词，把当前消息直接发的图片也缓存到 _all_cached_paths
+        # （供 _handle_save_img 使用；其他意图时 finally 块会自动清理缓存）
+        # 注：用全局 import re，不要在方法内 import（会遮蔽全局 re）
+        if img_urls and not _all_cached_paths:
+            save_pattern = re.compile(
+                r"(?<!缓)存到|存图|保存|存起来|存一下|收图|收藏|收了|全存|全部存|都存了")
+            if save_pattern.search(text):
+                log.info("CACHE_DIRECT_IMG: gid=%s img_count=%d save_keyword=yes",
+                         gid, len(img_urls))
+                direct_cached = await self._cache_fwd_images(img_urls)
+                _all_cached_paths.extend(direct_cached)
 
         # Build ref_context
         ref_context = RefContext()
@@ -588,8 +684,8 @@ class Bot:
         img_urls = item.get("img_urls", [])
         ref = item.get("ref_context", RefContext())
 
-        # / 命令
-        if text.startswith("/"):
+        # /生图 不走 / 命令，直接走意图路由
+        if text.startswith("/") and not re.search(r"/生图", text):
             await self._handle_cmd(gid, uid, text, at_bot)
             return
 
@@ -607,16 +703,60 @@ class Bot:
 
         # 色图列表
         if stripped == "色图列表":
-            lines = ["📁 可用色图列表："]
+            lines = ["📁 可用文件夹："]
             for name, aliases in self._get_available_srcs():
-                if aliases:
-                    lines.append(f"  {name}（{'、'.join(aliases)}）")
-                else:
+                depth = name.count("/")
+                if depth == 0:
                     lines.append(f"  {name}")
-            log.info("SE_TU_LIST_REPLY: gid=%s srcs=%d", gid, len(lines) - 1)
+                else:
+                    lines.append(f"    {name}")  # 带父路径的子文件夹
+                if aliases:
+                    lines[-1] += f"（{'、'.join(aliases)}）"
+            lines.append("")
+            lines.append("直接输入文件夹名即可发图（仅支持第一层文件夹）")
+            log.info("SE_TU_LIST_REPLY: gid=%s srcs=%d", gid, len(lines) - 2)
             await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
                 {"type": "text", "data": {"text": "\n".join(lines)}},
             ]})
+            return
+
+        # GIF 触发
+        gif_lower = stripped.lower()
+        if gif_lower == "gif 列表":
+            gif_dir = os.path.join(os.path.expanduser("~"), "Desktop", "转发图片", "GIF")
+            folders = []
+            try:
+                for d in sorted(os.listdir(gif_dir)):
+                    if os.path.isdir(os.path.join(gif_dir, d)):
+                        count = len([f for f in os.listdir(os.path.join(gif_dir, d))
+                                     if f.lower().endswith(".gif")])
+                        folders.append(f"  {d} ({count} 个GIF)")
+            except OSError:
+                pass
+            if not folders:
+                reply = "📁 还没有 GIF 分类"
+            else:
+                reply = "📁 GIF 分类列表：\n" + "\n".join(folders) + "\n\n发送 gif <分类名> 发3张GIF"
+            log.info("GIF_LIST_REPLY: gid=%s", gid)
+            await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                {"type": "text", "data": {"text": reply}},
+            ]})
+            return
+
+        if gif_lower.startswith("gif "):
+            gif_src = stripped[4:].strip()
+            if not gif_src:
+                await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                    {"type": "at", "data": {"qq": int(uid)}},
+                    {"type": "text", "data": {"text": " 用法: gif <分类名>  如: gif zmd"}},
+                ]})
+                return
+            now = time.time()
+            last = self.se_tu_cooldown.get(gid, 0)
+            if now - last >= 10:
+                self.se_tu_cooldown[gid] = now
+                log.info("GIF_TRIGGER: gid=%s src=%s", gid, gif_src)
+                await self._se_tu_send_gif(gid, uid, gif_src)
             return
 
         # 直接喊文件夹名发图
@@ -663,29 +803,27 @@ class Bot:
                         pass
                 log.info("CACHE_CLEANUP: removed %d files", len(ref.cached_paths))
 
-            # Auto-clear
-            if gid in AUTO_CLEAR_GROUPS:
-                self._clear_oc_session(gid, uid)
-
     # ─── 涩图直发 ──────────────────────────────────────
 
     @staticmethod
     def _match_direct_src(text):
-        """精确匹配：文本是否直接命中转发图片子文件夹名或 SRC_MAP 别名"""
+        """精确匹配：只匹配第一层文件夹名或 SRC_MAP 别名（不匹配子文件夹，不含 GIF）"""
         if not text:
             return None
-        # NFKC 归一化：处理 "穂"(U+7A42) vs "穗"(U+7A57) 等异体字差异
         norm = lambda s: unicodedata.normalize("NFKC", s)
         n_text = norm(text)
+
         # 1) SRC_MAP 别名匹配
         for folder, keywords in IntentRouter.SRC_MAP.items():
             if text in keywords or n_text in [norm(k) for k in keywords]:
                 return folder
-        # 2) 实际文件夹名精确匹配（NFKC 归一化后比较）
+
+        # 2) 第一层文件夹精确匹配（不含 GIF）
         fwd_dir = os.path.join(os.path.expanduser("~"), "Desktop", "转发图片")
         try:
-            for d in os.listdir(fwd_dir):
-                if os.path.isdir(os.path.join(fwd_dir, d)) and n_text == norm(d):
+            for d in sorted(os.listdir(fwd_dir)):
+                full = os.path.join(fwd_dir, d)
+                if os.path.isdir(full) and d != "GIF" and n_text == norm(d):
                     return d
         except OSError:
             pass
@@ -693,19 +831,27 @@ class Bot:
 
     @staticmethod
     def _get_available_srcs():
-        """返回所有可直接喊的文件夹名及别名，用于色图列表展示"""
+        """递归扫描所有文件夹（含子文件夹），返回 (显示路径, 别名列表)。排除 GIF 及 GIF/ 下内容。"""
         srcs = []
         # 1) SRC_MAP
         for folder, keywords in IntentRouter.SRC_MAP.items():
             aliases = [kw for kw in keywords if kw != folder]
             srcs.append((folder, aliases))
-        # 2) 实际文件夹（不在 SRC_MAP 中的）
+        # 2) 递归扫描转发图片/ 下所有子文件夹（排除 GIF）
         fwd_dir = os.path.join(os.path.expanduser("~"), "Desktop", "转发图片")
+        seen = set(IntentRouter.SRC_MAP.keys())
         try:
-            existing = set(IntentRouter.SRC_MAP.keys())
-            for d in sorted(os.listdir(fwd_dir)):
-                if os.path.isdir(os.path.join(fwd_dir, d)) and d not in existing:
-                    srcs.append((d, []))
+            for root, dirs, _ in os.walk(fwd_dir):
+                for d in sorted(dirs):
+                    sub = os.path.join(root, d)
+                    rel = os.path.relpath(sub, fwd_dir).replace("\\", "/")
+                    # 跳过顶层的 GIF 目录本身（GIF/zmd 等子文件夹会展示）
+                    if rel == "GIF":
+                        continue
+                    if rel in seen:
+                        continue
+                    seen.add(rel)
+                    srcs.append((rel, []))
         except OSError:
             pass
         return srcs
@@ -715,6 +861,9 @@ class Bot:
         发送图片到群。
         src=None → 全文件夹盲抽；src=<文件夹名> → 指定文件夹选图
         """
+        if not await self._check_daily_img_limit(gid, needed=1):
+            log.info("SE_TU_SKIP: gid=%s daily limit reached", gid)
+            return
         import shutil
         tc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tc", "1")
         os.makedirs(tc_dir, exist_ok=True)
@@ -744,11 +893,10 @@ class Bot:
             batch = paths[i:i + BATCH_SIZE]
             urls = []
             for img_path in batch:
-                compressed = await asyncio.to_thread(compress_image, img_path)
-                ext = os.path.splitext(compressed)[1].lower()
+                ext = os.path.splitext(img_path)[1].lower()
                 fname = f"{uuid.uuid4().hex}{ext}"
                 dst = os.path.join(tc_dir, fname)
-                shutil.copy2(compressed, dst)
+                shutil.copy2(img_path, dst)
                 urls.append(f"http://127.0.0.1:{IMG_PORT}/1/{fname}")
             url_str = ",".join(urls)
             cmd_send = [sys.executable, batch_script, "--group", str(gid), "--urls", url_str]
@@ -756,14 +904,209 @@ class Bot:
             async def _send_batch(c=cmd_send, b_len=len(batch)):
                 try:
                     proc = await asyncio.create_subprocess_exec(
-                        *c, stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL)
-                    await asyncio.wait_for(proc.wait(), timeout=15)
+                        *c, stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE)
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+                    if stdout:
+                        log.info("SE_TU_SEND_RESULT: gid=%s batch=%d out=%s",
+                                 gid, b_len, stdout.decode("utf-8", errors="replace")[:200])
+                    if stderr:
+                        log.warning("SE_TU_SEND_STDERR: gid=%s batch=%d err=%s",
+                                    gid, b_len, stderr.decode("utf-8", errors="replace")[:200])
                     log.info("SE_TU_SEND_OK: gid=%s batch=%d", gid, b_len)
                 except Exception as e2:
                     log.error("SE_TU_SEND_ERR: %s", str(e2)[:80])
 
             await self.send_queue.put(_send_batch())
+
+        self._incr_daily_img_usage(gid, len(paths))
+        log.info("DAILY_IMG_USAGE: gid=%s today=%d", gid, self._get_daily_img_used(gid))
+
+    # ─── GIF 发送 ──────────────────────────────────────
+
+    async def _se_tu_send_gif(self, gid, uid, src):
+        """
+        从 GIF/<src>/ 发 3 个 GIF（顺序窗口 + 防重复）。
+        选图方式：取所有未发送 GIF → 按文件名排序 → 随机起始位取连续 3 张。
+        """
+        GALLERY = 3
+        if not await self._check_daily_img_limit(gid, needed=GALLERY):
+            log.info("GIF_SKIP: gid=%s daily limit reached", gid)
+            return
+
+        import shutil
+        import json
+
+        gif_dir = os.path.join(os.path.expanduser("~"), "Desktop", "转发图片", "GIF", src)
+        if not os.path.isdir(gif_dir):
+            log.warning("GIF_DIR_NOT_FOUND: %s", gif_dir)
+            await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                {"type": "at", "data": {"qq": int(uid)}},
+                {"type": "text", "data": {"text": f" 没有「{src}」这个 GIF 分类"}},
+            ]})
+            return
+
+        # 1) 收集所有 .gif 文件，按文件名排序（即时间顺序）
+        all_gifs = sorted(
+            f for f in os.listdir(gif_dir)
+            if f.lower().endswith(".gif") and os.path.isfile(os.path.join(gif_dir, f))
+        )
+        if not all_gifs:
+            log.warning("GIF_EMPTY: %s", gif_dir)
+            await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                {"type": "at", "data": {"qq": int(uid)}},
+                {"type": "text", "data": {"text": f"「{src}」里还没有 GIF"}},
+            ]})
+            return
+
+        # 2) 加载已发送录（复用 pick_fwd_state.json）
+        state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "tc", ".pick_fwd_state.json")
+        state = {}
+        try:
+            if os.path.isfile(state_path):
+                with open(state_path, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+        except Exception:
+            pass
+
+        state_key = f"src_gif_{src}"
+        sent = set(state.get(state_key, []))
+
+        # 3) 筛选未发送
+        unsent = [f for f in all_gifs if f not in sent]
+
+        # 4) 剩余不足 GALLERY → 自动重置
+        if len(unsent) < GALLERY:
+            log.info("GIF_RESET: gid=%s src=%s all=%d unsent=%d reset",
+                     gid, src, len(all_gifs), len(unsent))
+            unsent = all_gifs[:]
+            sent = set()
+
+        # 5) 取 GALLERY 张（顺序窗口，随机起点）
+        if len(unsent) < GALLERY:
+            picks = unsent[:]
+        else:
+            import random
+            start = random.randint(0, len(unsent) - GALLERY)
+            picks = unsent[start:start + GALLERY]
+
+        # 6) 逐张发送 + 成功后才标记已发送
+        #    注：state 保存在 _send_gif_seq 内（发送确认后），不再提前存
+        tc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tc", "1")
+        os.makedirs(tc_dir, exist_ok=True)
+        batch_script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "tc", "send_images_batch.py")
+
+        async def _send_gif_seq():
+            sent_ok = 0
+            sent_files = []
+            for fname in picks:
+                src_path = os.path.join(gif_dir, fname)
+                dst = os.path.join(tc_dir, fname)
+                try:
+                    shutil.copy2(src_path, dst)
+                except OSError as e:
+                    log.warning("GIF_COPY_ERR: %s", str(e)[:80])
+                    continue
+                url = f"http://127.0.0.1:{IMG_PORT}/1/{fname}"
+                cmd = [sys.executable, batch_script, "--group", str(gid), "--urls", url]
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd, stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE)
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+                    if stdout:
+                        log.info("GIF_SEND_RESULT: gid=%s fname=%s out=%s",
+                                 gid, fname, stdout.decode("utf-8", errors="replace")[:200])
+                    if stderr:
+                        log.warning("GIF_SEND_STDERR: gid=%s fname=%s err=%s",
+                                    gid, fname, stderr.decode("utf-8", errors="replace")[:200])
+                    log.info("GIF_SEND_ONE_OK: gid=%s fname=%s", gid, fname)
+                    sent_ok += 1
+                    sent_files.append(fname)
+                    if sent_ok < len(picks):
+                        await asyncio.sleep(1)  # 每张间隔1秒
+                except Exception as e2:
+                    log.error("GIF_SEND_ONE_ERR: gid=%s fname=%s err=%s",
+                              gid, fname, str(e2)[:80])
+                    break  # 发送失败，不再继续发后面的
+
+            if sent_ok > 0:
+                # ★ 发送成功后，再保存已发送录（只标记实际发成功的文件）
+                try:
+                    current_state = {}
+                    if os.path.isfile(state_path):
+                        with open(state_path, "r", encoding="utf-8") as f:
+                            current_state = json.load(f)
+                except Exception:
+                    current_state = {}
+                current_sent = set(current_state.get(state_key, []))
+                current_state[state_key] = list(current_sent.union(sent_files))
+                try:
+                    with open(state_path, "w", encoding="utf-8") as f:
+                        json.dump(current_state, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+
+                self._incr_daily_img_usage(gid, sent_ok)
+                log.info("GIF_DONE: gid=%s src=%s sent=%d/%d total=%d",
+                         gid, src, sent_ok, len(picks), len(all_gifs))
+
+        await self.send_queue.put(_send_gif_seq())
+
+    # ─── 热加载配置 ────────────────────────────────────
+
+    CONFIG_RELOAD_FLAG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       ".reload_config.flag")
+
+    def _reload_config(self):
+        """重新读取 config.yaml，使改动即时生效。"""
+        try:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+            with open(path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception as e:
+            log.warning("RELOAD_CFG_ERR: %s", e)
+            return
+
+        old_se_tu = set(self._se_tu_tasks.keys())
+
+        # 更新自身缓存
+        self._group_configs = cfg.get("groups", {})
+        self._auto_clear_groups = set(cfg.get("auto_clear_groups", []))
+        self._trigger_kw = cfg.get("trigger_keywords", [])
+        self._admin_uids = cfg.get("admin_uids", [])
+        self._forbidden_ops = cfg.get("forbidden_ops", [])
+        self._gen_img_cfg = cfg.get("gen_img", {})
+
+        # 处理 auto_se_tu 定时器变化
+        new_se_tu = {gid for gid, gc in self._group_configs.items() if gc.get("auto_se_tu")}
+
+        # 停止已关闭的
+        for gid in old_se_tu - new_se_tu:
+            if gid in self._se_tu_tasks:
+                self._se_tu_tasks[gid].cancel()
+                del self._se_tu_tasks[gid]
+                log.info("RELOAD_CFG: stopped auto_se_tu for gid=%s", gid)
+
+        # 启动新增的
+        for gid in new_se_tu - old_se_tu:
+            if gid not in self._se_tu_tasks:
+                task = asyncio.create_task(self._se_tu_scheduler(gid))
+                self._se_tu_tasks[gid] = task
+                log.info("RELOAD_CFG: started auto_se_tu for gid=%s", gid)
+
+        log.info("RELOAD_CFG: done groups=%d se_tu=%d", len(self._group_configs), len(self._se_tu_tasks))
+
+    def _check_reload_flag(self):
+        """检查是否有重载配置的标记文件。"""
+        try:
+            if os.path.isfile(self.CONFIG_RELOAD_FLAG):
+                self._reload_config()
+                os.remove(self.CONFIG_RELOAD_FLAG)
+        except Exception:
+            pass
 
     # ─── 定时色图 ──────────────────────────────────────
 
@@ -781,6 +1124,12 @@ class Bot:
         # 首次延迟5分钟启动，给桥接充分初始化时间
         await asyncio.sleep(300)
         while not self._shutdown:
+            self._check_reload_flag()
+            # 每次循环检查该群是否仍开启 auto_se_tu
+            gcfg = getattr(self, '_group_configs', GROUP_PROMPTS).get(str(gid), {})
+            if not gcfg.get("auto_se_tu"):
+                log.info("AUTO_SE_TU_STOP: gid=%s disabled via config", gid)
+                break
             try:
                 log.info("AUTO_SE_TU: gid=%s", gid)
                 await self._se_tu_send(gid, "0")
@@ -794,10 +1143,8 @@ class Bot:
         result = IntentRouter.keyword_route(text, has_image, has_ref_image, has_ref_forward)
 
         if result["intent"] == "gen_img":
-            sf_intent = await self._sf_route(text, has_image, has_ref_image, has_ref_forward)
-            if sf_intent == "chat":
-                return {"intent": "chat", "confidence": "sf", "params": {}}
-            return {"intent": "gen_img", "confidence": "sf", "params": result["params"]}
+            # /st 是主动触发，不经过 SF 二次分类
+            return {"intent": "gen_img", "confidence": "keyword", "params": result["params"]}
 
         if result["confidence"] == "high":
             return result
@@ -838,7 +1185,8 @@ class Bot:
     # ─── 意图处理器 ────────────────────────────────────
 
     def _build_system_prompt(self, gid, intent, extra=""):
-        base = GROUP_PROMPTS.get(gid, {}).get("prompt", DEFAULT_PROMPT)
+        prompts = getattr(self, '_group_configs', GROUP_PROMPTS)
+        base = prompts.get(gid, {}).get("prompt", DEFAULT_PROMPT)
         intent_labels = {
             "chat": "【当前意图】普通聊天\n像在群里跟群友聊天一样，自然简短，30字以内。",
             "vision": (
@@ -856,11 +1204,7 @@ class Bot:
 
     async def _call_and_send(self, gid, uid, system_prompt, user_text, at_bot):
         ctx = self._build_context(gid, user_text)
-        if OC_ENABLED:
-            session_key = f"v3_group_{gid}"
-            reply = await self._call_oc(system_prompt, ctx, user_text, session_key)
-        else:
-            reply = await self._call_sf_chat(system_prompt, ctx, user_text)
+        reply = await self._call_sf_chat(system_prompt, ctx, user_text)
         if not reply or reply.strip() == "(no_reply)":
             return
 
@@ -936,6 +1280,12 @@ class Bot:
         await self._call_and_send(gid, uid, sp, user_text, at_bot)
 
     async def _handle_send_img(self, gid, uid, text, params, ref, at_bot):
+        if not await self._check_daily_img_limit(gid, needed=1):
+            await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                {"type": "at", "data": {"qq": int(uid)}},
+                {"type": "text", "data": {"text": " 今天的发图量已经用完了，明天再来吧~"}},
+            ]})
+            return
         count = params.get("count") or random.randint(4, 10)
         src = params.get("src")
         tc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tc", "1")
@@ -993,8 +1343,15 @@ class Bot:
             async def _send_batch(c=cmd_send, u=url_str, b_len=len(batch)):
                 try:
                     proc = await asyncio.create_subprocess_exec(
-                        *c, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                    await asyncio.wait_for(proc.communicate(), timeout=15)
+                        *c, stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE)
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+                    if stdout:
+                        log.info("SEND_BATCH_RESULT: gid=%s batch=%d out=%s",
+                                 gid, b_len, stdout.decode("utf-8", errors="replace")[:200])
+                    if stderr:
+                        log.warning("SEND_BATCH_STDERR: gid=%s batch=%d err=%s",
+                                    gid, b_len, stderr.decode("utf-8", errors="replace")[:200])
                     log.info("SEND_BATCH_OK: gid=%s batch=%d urls=%s", gid, b_len, u)
                     _log_gen_img(gid, uid, f"send_img:{src}", "sent", f"ok={b_len}")
                 except Exception as e2:
@@ -1010,33 +1367,98 @@ class Bot:
             segs.append({"type": "at", "data": {"qq": int(uid)}})
         segs.append({"type": "text", "data": {"text": reply}})
         await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": segs})
-        log.info("SEND_IMG_DONE: gid=%s images=%d", gid, len(images_to_send))
+        self._incr_daily_img_usage(gid, len(images_to_send))
+        log.info("SEND_IMG_DONE: gid=%s images=%d today=%d",
+                 gid, len(images_to_send), self._get_daily_img_used(gid))
 
     async def _handle_save_img(self, gid, uid, text, ref, at_bot):
         fwd_dir = os.path.join(os.path.expanduser("~"), "Desktop", "转发图片")
-        tc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tc", "1")
-        os.makedirs(fwd_dir, exist_ok=True)
+        gif_base = os.path.join(fwd_dir, "GIF")
+        video_base = os.path.join(fwd_dir, "视频")
 
         save_to = IntentRouter.extract_save_to(text) or "其他"
-        target_dir = os.path.join(fwd_dir, save_to)
-        os.makedirs(target_dir, exist_ok=True)
+        target_dir = os.path.join(fwd_dir, save_to)          # 静图 → <分类>/
+        gif_target_dir = os.path.join(gif_base, save_to)     # GIF → GIF/<分类>/
+        video_target_dir = os.path.join(video_base, save_to) # MP4 → 视频/<分类>/
+
+        # 模糊匹配：提取的文件夹名精确不存在时，尝试匹配已有文件夹前缀
+        # 例如 "存到萝莉泡泡" → "萝莉泡泡" → 已有"萝莉" → 匹配到"萝莉"
+        if not os.path.isdir(target_dir) and not os.path.isdir(gif_target_dir) and not os.path.isdir(video_target_dir):
+            try:
+                for d in os.listdir(fwd_dir):
+                    if os.path.isdir(os.path.join(fwd_dir, d)) and save_to.startswith(d):
+                        log.info("SAVE_IMG_DIR_FUZZY: input=%s matched=%s", save_to, d)
+                        save_to = d
+                        target_dir = os.path.join(fwd_dir, save_to)
+                        gif_target_dir = os.path.join(gif_base, save_to)
+                        video_target_dir = os.path.join(video_base, save_to)
+                        break
+            except OSError:
+                pass
 
         saved = 0
         cached = ref.cached_paths or []
+
+        if not cached:
+            log.info("SAVE_IMG: no cached images, gid=%s uid=%s save_to=%s", gid, uid, save_to)
+            reply = "没有可存的图片"
+            segs = []
+            if at_bot:
+                segs.append({"type": "at", "data": {"qq": int(uid)}})
+            segs.append({"type": "text", "data": {"text": reply}})
+            await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": segs})
+            log.info("SAVE_IMG_DONE: gid=%s saved=%d target=%s", gid, saved, save_to)
+            return
+
+        os.makedirs(fwd_dir, exist_ok=True)
+
+        # 扫描所有目录（静图 + GIF + 视频）的已有序号，共用编号序列
+        max_nnn = 0
+        for dir_to_check in (target_dir, gif_target_dir, video_target_dir):
+            try:
+                for existing in os.listdir(dir_to_check):
+                    m = re.match(r'^\d{8}_\d{6}_(\d{3})\.\w+$', existing)
+                    if m:
+                        n = int(m.group(1))
+                        if n > max_nnn:
+                            max_nnn = n
+            except OSError:
+                pass
+        next_nnn = max_nnn + 1
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
         for src_path in cached:
             if not os.path.isfile(src_path):
                 continue
-            compressed = await asyncio.to_thread(compress_image, src_path)
-            dst = os.path.join(target_dir, os.path.basename(compressed))
+            ext = os.path.splitext(src_path)[1] or ".jpg"
+            # 按文件类型路由到对应目录
+            if ext.lower() == ".gif":
+                dst_dir = gif_target_dir
+            elif ext.lower() == ".mp4":
+                dst_dir = video_target_dir
+            else:
+                dst_dir = target_dir
+            os.makedirs(dst_dir, exist_ok=True)
+            # 以标准化命名 YYYYMMDD_HHmmss_NNN.ext 存图（覆盖一键重命名功能）
+            fname = f"{now_str}_{next_nnn:03d}{ext}"
+            dst = os.path.join(dst_dir, fname)
+            next_nnn += 1
             try:
-                shutil.copy2(compressed, dst)
+                shutil.copy2(src_path, dst)
                 saved += 1
             except Exception as e:
                 log.warning("SAVE_IMG_ERR: %s", str(e)[:80])
 
         if saved > 0:
-            log.info("SAVE_IMG: saved %d to %s", saved, target_dir)
+            log.info("SAVE_IMG: saved %d to %s", saved, save_to)
             reply = f"已存到「{save_to}」{saved}张 ✅"
+            # 后台触发扫描器，压缩 >500KB 的图片（GIF 不会被压缩）
+            t = threading.Thread(
+                target=_trigger_compress,
+                args=([fwd_dir], MAX_IMAGE_SIZE),
+                daemon=True,
+            )
+            t.start()
         else:
             log.info("SAVE_IMG: no images to save, gid=%s uid=%s save_to=%s", gid, uid, save_to)
             reply = "没有可存的图片"
@@ -1049,12 +1471,41 @@ class Bot:
         await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": segs})
         log.info("SAVE_IMG_DONE: gid=%s saved=%d target=%s", gid, saved, save_to)
 
+    async def _handle_add_group(self, gid, uid):
+        """管理员添加群到白名单"""
+        log.info("CMD_ADD: gid=%s uid=%s", gid, uid)
+        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as _f:
+                new_cfg = yaml.safe_load(_f) or {}
+            groups = new_cfg.setdefault("groups", {})
+            if str(gid) in groups:
+                await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                    {"type": "text", "data": {"text": "该群已在白名单中 ✅"}},
+                ]})
+                return
+            prompt = "你是一个QQ群聊机器人叫泡泡。在群里像真人一样聊天，语气轻松自然，偶尔开玩笑。回复简短（30字以内）。"
+            groups[str(gid)] = {"prompt": prompt}
+            with open(cfg_path, "w", encoding="utf-8") as _f:
+                yaml.dump(new_cfg, _f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            prompts = getattr(self, '_group_configs', GROUP_PROMPTS)
+            prompts[str(gid)] = {"prompt": prompt}
+            self._reload_config()
+            log.info("CMD_ADD_OK: gid=%s added to whitelist", gid)
+            await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                {"type": "text", "data": {"text": "已将该群加入白名单 ✅ 开始聊天吧~"}},
+            ]})
+        except Exception as e:
+            log.error("CMD_ADD_ERR: %s", str(e)[:100])
+            await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                {"type": "text", "data": {"text": f"添加失败: {str(e)[:50]}"}},
+            ]})
+
     async def _handle_cmd(self, gid, uid, text, at_bot):
         cmd = text.strip().split()[0].lower()
 
         if gid in self.context:
             del self.context[gid]
-        self._clear_oc_session(gid, uid)
 
         if cmd == "/clear":
             log.info("CMD_CLEAR: gid=%s uid=%s", gid, uid)
@@ -1063,31 +1514,52 @@ class Bot:
             ]})
             return
 
-        base = GROUP_PROMPTS.get(gid, {}).get("prompt", DEFAULT_PROMPT)
+        # /add — 管理员将当前群加入白名单（已白名单的群里的快捷方式）
+        if cmd == "/add" and str(uid) in (getattr(self, '_admin_uids', ADMIN_UIDS)):
+            await self._handle_add_group(gid, uid)
+            return
+
+        prompts = getattr(self, '_group_configs', GROUP_PROMPTS)
+        base = prompts.get(gid, {}).get("prompt", DEFAULT_PROMPT)
         sp = f"当前QQ群号: {gid}\n\n{base}"
         user_text = text
         await self._call_and_send(gid, uid, sp, user_text, at_bot)
 
-    def _clear_oc_session(self, gid, uid=None):
-        sk = f"agent:paopao:openai-user:v3_group_{gid}"
-        ss = os.path.join(
-            os.path.expanduser("~"), ".openclaw", "agents", "paopao", "sessions", "sessions.json")
+    # ─── 每日发图限额 ─────────────────────────────────
+
+    def _get_daily_img_limit(self, gid):
+        gcfg = (getattr(self, '_group_configs', GROUP_PROMPTS)).get(str(gid), {})
+        return gcfg.get("daily_img_limit", 0)
+
+    def _get_daily_img_used(self, gid):
+        today = datetime.now().strftime("%Y-%m-%d")
+        return self.daily_img_usage.get(f"{today}|{gid}", 0)
+
+    def _incr_daily_img_usage(self, gid, count=1):
+        today = datetime.now().strftime("%Y-%m-%d")
+        key = f"{today}|{gid}"
+        self.daily_img_usage[key] = self.daily_img_usage.get(key, 0) + count
+        self._save_daily_img_usage()
+
+    def _save_daily_img_usage(self):
+        """持久化到 JSON 文件，供 config_web 前端读取。"""
         try:
-            with open(ss, "r", encoding="utf-8") as f:
-                store = json.load(f)
-            entry = store.get(sk)
-            if entry:
-                sf = entry.get("sessionFile", "")
-                if sf and os.path.isfile(sf):
-                    os.remove(sf)
-                tf = sf.replace(".jsonl", ".trajectory.jsonl") if sf else ""
-                if tf and os.path.isfile(tf):
-                    os.remove(tf)
-                del store[sk]
-                with open(ss, "w", encoding="utf-8") as f:
-                    json.dump(store, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            log.warning("CLEAR_SESSION_ERR: %s", str(e)[:100])
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                ".daily_img_usage.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.daily_img_usage, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    async def _check_daily_img_limit(self, gid, needed=1):
+        limit = self._get_daily_img_limit(gid)
+        if limit <= 0:
+            return True
+        used = self._get_daily_img_used(gid)
+        ok = (used + needed) <= limit
+        if not ok:
+            log.info("DAILY_IMG_LIMIT: gid=%s used=%d/%d", gid, used, limit)
+        return ok
 
     # ─── 生图 ──────────────────────────────────────────
 
@@ -1127,19 +1599,17 @@ class Bot:
         os.makedirs(IMG_STORAGE, exist_ok=True)
         ref_img_urls = []
 
-        # 1) 当前消息自带的图片（NapCat URL → 下载到本地）
+        # 1) 当前消息自带的图片（NapCat URL → 下载到本地，用文件头识别格式）
         for url in (img_urls or []):
             try:
-                ext = ".jpg"
-                for e in [".png", ".gif", ".webp", ".bmp", ".jpeg"]:
-                    if e in url.lower():
-                        ext = e
-                        break
+                import urllib.request
+                tmp = os.path.join(IMG_STORAGE, f"tmp_{uuid.uuid4().hex}")
+                urllib.request.urlretrieve(url, tmp)
+                ext = self._detect_image_ext(tmp)
                 fname = f"ref_{uuid.uuid4().hex}{ext}"
                 dst = os.path.join(IMG_STORAGE, fname)
-                import urllib.request
-                urllib.request.urlretrieve(url, dst)
-                ref_img_urls.append(dst)  # 本地绝对路径
+                os.rename(tmp, dst)
+                ref_img_urls.append(dst)  # 本地路径
                 log.info("GEN_IMG_REF_DL: url=%s dst=%s", url[:50], fname)
             except Exception as e:
                 log.warning("GEN_IMG_DL_ERR: %s", str(e)[:80])
@@ -1152,10 +1622,10 @@ class Bot:
                     fname = f"ref_{uuid.uuid4().hex}{ext}"
                     dst = os.path.join(IMG_STORAGE, fname)
                     shutil.copy2(path, dst)
-                    ref_img_urls.append(dst)  # 本地绝对路径
+                    ref_img_urls.append(dst)  # 本地路径
 
-        # 最多 3 张参考图
-        ref_img_urls = ref_img_urls[:3]
+        # 最多 10 张参考图
+        ref_img_urls = ref_img_urls[:10]
 
         if not prompt and not ref_img_urls:
             await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
@@ -1169,15 +1639,35 @@ class Bot:
         _log_gen_img(gid, uid, prompt, "prompt",
                      f"raw={text[:60]} ref_imgs={len(ref_img_urls)} model=gpt-image-2")
 
-        image_data = await gen_image(prompt, image_urls=ref_img_urls if ref_img_urls else None)
-        if not image_data:
+        # 读取生图配置（品质/分辨率）
+        prompts = getattr(self, '_group_configs', GROUP_PROMPTS)
+        gen_cfg = getattr(self, '_gen_img_cfg', None)
+        if gen_cfg is None:
+            import yaml as _y
+            try:
+                _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+                with open(_p, encoding="utf-8") as _f:
+                    gen_cfg = _y.safe_load(_f).get("gen_img", {})
+                self._gen_img_cfg = gen_cfg
+            except Exception:
+                gen_cfg = {}
+        gsize = gen_cfg.get("size") or None
+        gquality = gen_cfg.get("quality") or None
+        result = await gen_image(prompt, image_paths=ref_img_urls if ref_img_urls else None,
+                                     size=gsize, quality=gquality)
+        if not result.ok:
+            status = result.status or 502
+            msg = result.error[:80] if result.error else f"HTTP {status}"
             _log_gen_img(gid, uid, prompt, "api_fail",
-                         "model=gpt-image-2 size=auto quality=auto")
+                         f"status={status} error={msg}")
+            from gen_img import STATUS_MSGS
+            hint = STATUS_MSGS.get(status, f"未知错误 ({status})")
             await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
                 {"type": "at", "data": {"qq": int(uid)}},
-                {"type": "text", "data": {"text": " 画图失败了，可能是 API 出问题了\U0001f605"}},
+                {"type": "text", "data": {"text": f" 生图失败 ({status}): {hint}"}},
             ]})
             return
+        image_data = result.data
         _log_gen_img(gid, uid, prompt, "api_ok",
                      f"model=gpt-image-2 size=auto quality=auto resp_size={len(image_data)}bytes")
 
@@ -1228,7 +1718,6 @@ class Bot:
             await self._ws.close()
         if self._session:
             await self._session.close()
-        await self._oc_client.aclose()
         await self._sf_client.aclose()
         self.img.cleanup()
 

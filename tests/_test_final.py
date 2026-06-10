@@ -2,7 +2,7 @@
 import httpx, json, time, sys, os
 sys.stdout.reconfigure(encoding="utf-8")
 
-SF_KEY = "YOUR_SILICONFLOW_API_KEY"
+SF_KEY = "sk-ydqpvfaohcftjbxwpzpyzqcpdwweqvgdddkcavgmvxajkmja"
 SF_BASE = "https://api.siliconflow.cn/v1/chat/completions"
 
 PROMPT = (

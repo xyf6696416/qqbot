@@ -1,10 +1,11 @@
 """
 图片工具模块
-- compress_image: 图片压缩（>500KB 自动 PNG→JPG）
+- compress_image: 图片压缩（>500KB 所有格式统一转 JPG，阶梯降 quality）
 - ImageServer: 本地图床管理（启动/复制/截图/清理）
 """
 
 import asyncio
+import io
 import logging
 import os
 import shutil
@@ -19,12 +20,31 @@ from config import IMG_PORT, IMG_URL, IMG_STORAGE, TC_DIR, MAX_IMAGE_SIZE
 
 log = logging.getLogger("gw")
 
+# 阶梯 quality：从高到低，取第一个 ≤ max_size 的结果
+QUALITY_LADDER = [93, 85, 75, 65, 55, 45, 35, 25, 15, 8, 5]
+
+
+def _to_rgb(img):
+    """任意模式转 RGB，透明通道合成为白色背景。"""
+    if img.mode in ("RGBA", "LA", "P"):
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode == "RGBA":
+            bg.paste(img, mask=img.split()[3])
+        else:
+            bg.paste(img)
+        return bg
+    if img.mode != "RGB":
+        return img.convert("RGB")
+    return img
+
 
 def compress_image(path: str, max_size=MAX_IMAGE_SIZE) -> str:
     """
-    压缩图片至 max_size 以下，返回输出路径。
-    原图小于 max_size → 直接返回原路径。
-    格式转换（PNG→JPG）→ 删除原文件，避免 tc/1/ 残留。
+    压缩图片至 max_size 以下，统一转 JPG，返回输出路径。
+    原图 ≤ max_size → 直接返回原路径。
+    使用阶梯 quality 从高到低尝试，找到刚好 ≤ max_size 的最大 quality。
     """
     if not os.path.isfile(path):
         return path
@@ -33,37 +53,50 @@ def compress_image(path: str, max_size=MAX_IMAGE_SIZE) -> str:
         return path
     try:
         img = Image.open(path)
+        img_rgb = _to_rgb(img)
+        size = os.path.getsize(path)
+
+        # 阶梯降 quality
+        best_data = None
+        best_q = 0
+        for q in QUALITY_LADDER:
+            buf = io.BytesIO()
+            img_rgb.save(buf, format="JPEG", quality=q, optimize=True,
+                         progressive=True, subsampling=-1)
+            if buf.tell() <= max_size:
+                best_data = buf.getvalue()
+                best_q = q
+                break
+
+        if best_data is None:
+            # 最低 quality 仍超限 → 用最低 quality
+            buf = io.BytesIO()
+            img_rgb.save(buf, format="JPEG", quality=QUALITY_LADDER[-1],
+                         optimize=True, progressive=True, subsampling=-1)
+            best_data = buf.getvalue()
+            best_q = QUALITY_LADDER[-1]
+
+        final_size = len(best_data)
         ext = os.path.splitext(path)[1].lower()
-        base, _ = os.path.splitext(path)
-        need_convert = ext in (".png", ".bmp", ".tiff", ".tif")
-        has_alpha = img.mode in ("RGBA", "LA", "P") and need_convert
-        converted = False
-        if need_convert and not has_alpha and img.mode != "RGB":
-            img = img.convert("RGB")
-            out_path = base + ".jpg"
-            converted = True
-        else:
+        if ext in (".jpg", ".jpeg"):
             out_path = path
-        fmt = "JPEG" if out_path.endswith(".jpg") else "PNG" if out_path.endswith(".png") else "WEBP"
-        ratio = size / max_size
-        quality = max(30, min(85, int(85 / ratio)))
-        opts_final = {"format": fmt}
-        if fmt != "PNG":
-            opts_final["quality"] = quality
-        img.save(out_path, **opts_final)
-        if fmt != "PNG" and os.path.getsize(out_path) > max_size:
-            quality = max(20, quality - 15)
-            opts_final["quality"] = quality
-            img.save(out_path, **opts_final)
-        final_size = os.path.getsize(out_path)
-        log.info("COMPRESS: %s %dKB -> %s %dKB (q=%d)",
-                 os.path.basename(path), size // 1024,
-                 os.path.basename(out_path), final_size // 1024, quality)
-        if converted and os.path.isfile(path):
-            try:
-                os.remove(path)
-            except Exception:
-                pass
+            tmp = path + ".tmp_c"
+            with open(tmp, "wb") as f:
+                f.write(best_data)
+            os.replace(tmp, path)
+        else:
+            out_path = os.path.splitext(path)[0] + ".jpg"
+            with open(out_path, "wb") as f:
+                f.write(best_data)
+            if os.path.isfile(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+        log.info("COMPRESS: %s %dKB -> %dKB (q=%d)",
+                 os.path.basename(out_path), size // 1024,
+                 final_size // 1024, best_q)
         return out_path
     except Exception as e:
         log.warning("COMPRESS_ERR: %s %s", os.path.basename(path), str(e)[:80])

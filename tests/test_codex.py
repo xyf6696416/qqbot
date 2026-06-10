@@ -2,7 +2,7 @@
 import json, urllib.request
 
 url = "https://new.sharedchat.cc/codex/v1/responses"
-key = "YOUR_CODEX_API_KEY"
+key = "sk-n9ADUSn7bbeGSUd716ZyjDK4b4p0fxJy"
 
 payload = json.dumps({
     "model": "gpt-5.5",

@@ -1,0 +1,14 @@
+14:55:20 [gw] INFO ========================================================
+14:55:20 [gw] INFO   NapCat Bridge v6.3 Mod + IntentRouter + GenImg
+14:55:20 [gw] INFO   WS: ws://127.0.0.1:18888
+14:55:20 [gw] INFO   Vision: Qwen/Qwen3-VL-8B-Instruct
+14:55:20 [gw] INFO   GenImg: gpt-image-2 (daily limit 99)
+14:55:20 [gw] INFO   Router: keyword + SF fallback
+14:55:20 [gw] INFO   Context: 200 msgs/group
+14:55:20 [gw] INFO   Groups: ['788327119', '1026442086', '1037926595', '1047550014']
+14:55:20 [gw] INFO ========================================================
+14:55:20 [gw] INFO KILL_OLD: PID=5388 started=1781074519.505915
+14:55:20 [gw] INFO KILL_OLD: PID=9888 started=1781074517.2863536
+14:55:20 [gw] INFO KILL_OLD: PID=10724 started=1781074330.5107193
+14:55:20 [gw] INFO KILL_OLD_DONE: killed 3 old bridge(s): [5388, 9888, 10724]
+14:55:20 [asyncio] DEBUG Using proactor: IocpProactor

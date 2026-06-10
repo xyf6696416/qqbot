@@ -45,7 +45,7 @@ class IntentRouter:
     VISION += [r"第\d+张看看"]
     VISION += [r"什么图|谁啊|是谁"]
 
-    GEN_IMG = [r"^st\b|\bst\b"]
+    GEN_IMG = [r"/生图"]
 
     SRC_MAP = {
         "萝莉": ["萝莉", "loli"],

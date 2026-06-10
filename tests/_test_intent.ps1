@@ -1,4 +1,4 @@
-$key = "YOUR_SILICONFLOW_API_KEY"
+$key = "sk-ydqpvfaohcftjbxwpzpyzqcpdwweqvgdddkcavgmvxajkmja"
 
 Write-Host "=== 意图分类测试 (SF Qwen2.5-7B-Instruct) ==="
 Write-Host ""

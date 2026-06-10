@@ -4,7 +4,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 print("1. Testing config...")
-from config import (NAPCAT_WS, OC_API, OC_TOKEN, AGENT_ID, TRIGGER_KW,
+from config import (NAPCAT_WS, TRIGGER_KW,
                     GROUP_PROMPTS, DEFAULT_PROMPT, AUTO_CLEAR_GROUPS,
                     SF_KEY, SF_MODEL, IMG_PORT, IMG_URL, IMG_STORAGE,
                     MAX_CONTEXT, GEN_IMG_DAILY_LIMIT)

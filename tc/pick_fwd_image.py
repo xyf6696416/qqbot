@@ -19,8 +19,11 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-FWD_DIR = Path(os.path.expanduser("~/Desktop/转发图片"))
+FWD_DIR = Path(r"C:\Users\Administrator\Desktop\转发图片")
 STATE_FILE = Path(__file__).parent / ".pick_fwd_state.json"
+
+# --gif 模式：只选 GIF；默认排除 GIF（只选静态图）
+_GIF_MODE = False
 
 
 def load_state():
@@ -46,7 +49,7 @@ def get_all_images(src_dir):
         print(f"错误：目录不存在 {src_dir}", file=sys.stderr)
         sys.exit(1)
 
-    exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+    exts = {".gif"} if _GIF_MODE else {".jpg", ".jpeg", ".png", ".webp"}
     return sorted(
         p for p in src_dir.iterdir()
         if p.is_file() and p.suffix.lower() in exts
@@ -55,7 +58,7 @@ def get_all_images(src_dir):
 
 def get_all_images_all_src():
     """没有指定 src 时，扫描所有子文件夹合并所有图片"""
-    exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+    exts = {".gif"} if _GIF_MODE else {".jpg", ".jpeg", ".png", ".webp"}
     all_images = []
     for d in sorted(FWD_DIR.iterdir()):
         if d.is_dir():
@@ -97,16 +100,20 @@ def main():
     parser.add_argument("--src", type=str, default=None, help="转发图片下的子文件夹名，如: 萝莉, 同人, 色彩图")
     parser.add_argument("--reset", action="store_true", help="清空已发记录")
     parser.add_argument("--list-src", action="store_true", help="列出可用的子文件夹")
+    parser.add_argument("--gif", action="store_true", help="只选 GIF 文件（默认排除 GIF）")
 
     args = parser.parse_args()
+    global _GIF_MODE
+    _GIF_MODE = args.gif
 
     # 列表模式
     if args.list_src:
+        exts = {".gif"} if _GIF_MODE else {".jpg", ".jpeg", ".png", ".webp"}
         subdirs = [d for d in FWD_DIR.iterdir() if d.is_dir()]
         if not subdirs:
             print("桌面转发图片下没有子文件夹")
         for d in sorted(subdirs):
-            count = len([f for f in d.iterdir() if f.is_file()])
+            count = len([f for f in d.iterdir() if f.is_file() and f.suffix.lower() in exts])
             print(f"  {d.name} ({count} 张)")
         sys.exit(0)
 
@@ -141,7 +148,13 @@ def main():
         state[state_key] = []
         available = get_available(all_images, state, state_key, use_relpath=not src_name)
 
-    picks = random.sample(available, min(count, len(available)))
+    # 顺序窗口选图：按文件名排序 → 随机起始位取连续 count 张
+    # 保证图片按时间顺序发送，不跳图不漏图（与 GIF 选图逻辑一致）
+    if len(available) <= count:
+        picks = available[:]
+    else:
+        start = random.randint(0, len(available) - count)
+        picks = available[start:start + count]
 
     state.setdefault(state_key, [])
     if src_name:

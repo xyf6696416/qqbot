@@ -5,10 +5,13 @@
 """
 
 import os
+import re
 import sys
 import json
 import signal
 import subprocess
+import threading
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -16,12 +19,62 @@ from flask import Flask, render_template, request, jsonify
 
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.yaml"
+RELOAD_FLAG = BASE_DIR / ".reload_config.flag"
 PORT = 7788
 
 app = Flask(__name__, template_folder=BASE_DIR / "templates")
 
+# ── 图片压缩调度器 ──
+from image_compressor import status as comp_status, scan_and_compress, start_scheduler, scheduler as comp_scheduler
+
+# 调度器初始化锁（确保只启动一次）
+_compressor_inited = False
+_compressor_init_lock = threading.Lock()
+
+
+def _init_compressor_scheduler():
+    """从 config.yaml 读取压缩配置并启动调度器"""
+    global _compressor_inited
+    with _compressor_init_lock:
+        if _compressor_inited:
+            return
+        _compressor_inited = True
+        try:
+            cfg = read_config()
+            cc = cfg.get("image_compressor", {})
+            enabled = cc.get("enabled", True)
+            interval = cc.get("interval_minutes", 30)
+            max_size_kb = cc.get("max_size_kb", 500)
+            scan_dirs = cc.get("scan_dirs", [
+                str(BASE_DIR / "tc" / "1"),
+                os.path.expanduser("~/Desktop/AI生成"),
+            ])
+            # 确保 tc/1 存在
+            resolved = []
+            for d in scan_dirs:
+                p = os.path.expanduser(d)
+                if not os.path.isabs(p):
+                    p = str(BASE_DIR / p)
+                resolved.append(p)
+            start_scheduler(
+                enabled=enabled,
+                interval_minutes=interval,
+                dirs=resolved,
+                max_size_kb=max_size_kb,
+            )
+        except Exception as e:
+            print(f"[压缩机] 初始化失败: {e}")
+
 
 # ── 配置读写 ─────────────────────────────────────────────
+
+def _signal_reload():
+    """通知 bridge.py 重载配置（写标记文件）。"""
+    try:
+        RELOAD_FLAG.write_text("1", encoding="utf-8")
+    except Exception:
+        pass
+
 
 def read_config():
     """读取 config.yaml 返回 dict"""
@@ -68,6 +121,8 @@ def api_get_config():
 def api_save_config():
     body = request.get_json(force=True)
     ok, msg = write_config(body)
+    if ok:
+        _signal_reload()
     return jsonify({"ok": ok, "message": msg})
 
 
@@ -96,6 +151,7 @@ def api_save_raw():
             shutil.copy2(CONFIG_FILE, backup)
         # 写入
         CONFIG_FILE.write_text(raw, encoding="utf-8")
+        _signal_reload()
         return jsonify({"ok": True, "message": "保存成功"})
     except yaml.YAMLError as e:
         return jsonify({"ok": False, "error": f"YAML 格式错误: {e.problem}"})
@@ -144,58 +200,294 @@ def api_restart():
 
 @app.route("/api/status", methods=["GET"])
 def api_status():
-    """检查 bridge 和图片服务器运行状态"""
+    """检查所有服务运行状态：NapCat、图床、桥接、配置后端自身"""
     import socket
     import psutil
-    bridges = 0
-    img_servers = 0
-    try:
-        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                cmdline = proc.info.get("cmdline") or []
-                cmd_str = " ".join(cmdline)
-                if "bridge.py" not in cmd_str:
-                    continue
-                if "config_web.py" in cmd_str or "image_server.py" in cmd_str:
-                    continue
-                if "bridge.py" in cmd_str:
-                    bridges += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                cmdline = proc.info.get("cmdline") or []
-                cmd_str = " ".join(cmdline)
-                if "image_server.py" in cmd_str:
-                    img_servers += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-    except Exception:
-        pass
 
-    img_port_open = False
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
-        img_port_open = s.connect_ex(('127.0.0.1', 7777)) == 0
-        s.close()
-    except Exception:
-        pass
+    def check_process(keyword, exclude=None):
+        count = 0
+        try:
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                try:
+                    cmdline = proc.info.get("cmdline") or []
+                    cmd_str = " ".join(cmdline)
+                    if keyword not in cmd_str:
+                        continue
+                    if exclude and exclude in cmd_str:
+                        continue
+                    count += 1
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        except Exception:
+            pass
+        return count
+
+    def check_port(port):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1)
+            ok = s.connect_ex(('127.0.0.1', port)) == 0
+            s.close()
+            return ok
+        except Exception:
+            return False
+
+    bridges = check_process("bridge.py", "config_web.py")
+    img_servers = check_process("image_server.py")
+    napcat_proc = check_process("NapCatWinBootMain")
 
     return jsonify({
         "ok": True,
         "data": {
+            # 桥接
             "bridge_running": bridges > 0,
             "bridge_count": bridges,
+            # 图床
             "img_server_running": img_servers > 0,
-            "img_port_open": img_port_open,
+            "img_port_open": check_port(7777),
+            # NapCat QQ
+            "napcat_running": napcat_proc > 0,
+            "napcat_port_open": check_port(18888),
+            # 配置后端自身（能响应请求即表明在线）
+            "config_web_running": True,
         }
     })
+
+
+# ── 图片压缩 API ──────────────────────────────────────
+
+@app.route("/api/compressor/status", methods=["GET"])
+def api_compressor_status():
+    """获取压缩器状态"""
+    return jsonify({
+        "ok": True,
+        "data": comp_status.to_dict(),
+    })
+
+
+@app.route("/api/compressor/config", methods=["GET"])
+def api_compressor_get_config():
+    """获取压缩配置"""
+    cc = read_config().get("image_compressor", {})
+    return jsonify({
+        "ok": True,
+        "data": {
+            "enabled": cc.get("enabled", True),
+            "interval_minutes": cc.get("interval_minutes", 30),
+            "max_size_kb": cc.get("max_size_kb", 500),
+            "scan_dirs": cc.get("scan_dirs", [
+                str(BASE_DIR / "tc" / "1"),
+                os.path.expanduser("~/Desktop/AI生成"),
+            ]),
+            "scheduler": comp_scheduler.to_dict(),
+        }
+    })
+
+
+@app.route("/api/compressor/config", methods=["POST"])
+def api_compressor_set_config():
+    """更新压缩配置并重启调度器"""
+    body = request.get_json(force=True)
+    cfg = read_config()
+    cc = cfg.setdefault("image_compressor", {})
+
+    if "enabled" in body:
+        cc["enabled"] = bool(body["enabled"])
+    if "interval_minutes" in body:
+        cc["interval_minutes"] = max(1, int(body["interval_minutes"]))
+    if "max_size_kb" in body:
+        cc["max_size_kb"] = max(50, int(body["max_size_kb"]))
+    if "scan_dirs" in body and isinstance(body["scan_dirs"], list):
+        cc["scan_dirs"] = body["scan_dirs"]
+
+    ok, msg = write_config(cfg)
+    if not ok:
+        return jsonify({"ok": False, "error": msg})
+    _signal_reload()
+
+    # 重启调度器
+    enabled = cc.get("enabled", True)
+    interval = cc.get("interval_minutes", 30)
+    max_size_kb = cc.get("max_size_kb", 500)
+    scan_dirs = cc.get("scan_dirs", [])
+
+    resolved = []
+    for d in scan_dirs:
+        p = os.path.expanduser(d)
+        if not os.path.isabs(p):
+            p = str(BASE_DIR / p)
+        resolved.append(p)
+
+    global _compressor_inited
+    _compressor_inited = True
+    start_scheduler(
+        enabled=enabled,
+        interval_minutes=interval,
+        dirs=resolved,
+        max_size_kb=max_size_kb,
+    )
+
+    return jsonify({"ok": True, "message": "压缩配置已更新"})
+
+
+@app.route("/api/compressor/run", methods=["POST"])
+def api_compressor_run():
+    """手动触发一次扫描压缩"""
+    if comp_status.running:
+        return jsonify({"ok": False, "error": "压缩扫描正在进行中，请等待完成"})
+
+    cfg = read_config().get("image_compressor", {})
+    scan_dirs = cfg.get("scan_dirs", [str(BASE_DIR / "tc" / "1"), os.path.expanduser("~/Desktop/AI生成")])
+    max_size_kb = cfg.get("max_size_kb", 500)
+
+    resolved = []
+    for d in scan_dirs:
+        p = os.path.expanduser(d)
+        if not os.path.isabs(p):
+            p = str(BASE_DIR / p)
+        resolved.append(p)
+
+    # 在后台线程执行，不阻塞 API
+    def _run():
+        scan_and_compress(resolved, max_size_kb * 1024)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    return jsonify({"ok": True, "message": "压缩扫描已启动"})
+
+
+# ── 一键重命名 API ──────────────────────────────────
+
+_SUPPORTED_RENAME_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
+
+_RENAME_RE = re.compile(r"^\d{8}_\d{6}_\d{3}\.")  # 匹配已重命名格式
+
+
+@app.route("/api/compressor/rename", methods=["POST"])
+def api_compressor_rename():
+    """一键重命名扫描目录中的图片文件，按修改时间排序命名。"""
+    cfg = read_config().get("image_compressor", {})
+    scan_dirs = cfg.get("scan_dirs", [str(BASE_DIR / "tc" / "1"),
+                                       os.path.expanduser("~/Desktop/AI生成")])
+
+    resolved_dirs = []
+    for d in scan_dirs:
+        p = os.path.expanduser(d)
+        if os.path.isdir(p):
+            resolved_dirs.append(p)
+
+    if not resolved_dirs:
+        return jsonify({"ok": False, "error": "没有有效的扫描目录"})
+
+    results = {"renamed": 0, "skipped": 0, "errors": [], "files": []}
+
+    for base_dir in resolved_dirs:
+        # 收集所有图片文件
+        all_files = []
+        for root, _dirs, fnames in os.walk(base_dir):
+            for fname in fnames:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext not in _SUPPORTED_RENAME_EXT:
+                    continue
+                fpath = os.path.join(root, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                except OSError:
+                    continue
+                all_files.append((mtime, fpath))
+
+        if not all_files:
+            continue
+
+        # 按 mtime 排序
+        all_files.sort(key=lambda x: x[0])
+
+        renamed_count = 0
+        for mtime, fpath in all_files:
+            folder = os.path.dirname(fpath)
+            ext = os.path.splitext(fpath)[1].lower()
+            fname = os.path.basename(fpath)
+
+            # 跳过已是 YYYYMMDD_HHmmss_NNN.ext 格式的文件
+            if _RENAME_RE.match(fname):
+                results["skipped"] += 1
+                continue
+
+            # 生成时间戳部分
+            ts = datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
+            seq = 1
+            while True:
+                new_name = f"{ts}_{seq:03d}{ext}"
+                new_path = os.path.join(folder, new_name)
+                if not os.path.exists(new_path):
+                    break
+                seq += 1
+
+            try:
+                os.rename(fpath, new_path)
+                renamed_count += 1
+                results["renamed"] += 1
+                results["files"].append({
+                    "old": fname,
+                    "new": new_name,
+                    "folder": os.path.relpath(folder, base_dir) if folder != base_dir else ".",
+                })
+            except OSError as e:
+                results["errors"].append({"file": fname, "error": str(e)[:80]})
+
+    return jsonify({
+        "ok": True,
+        "data": results,
+        "message": f"重命名完成：{results['renamed']} 个成功，{results['skipped']} 个跳过"
+    })
+
+
+# ── 每日发图用量 API ─────────────────────────────────
+
+DAILY_USAGE_FILE = BASE_DIR / ".daily_img_usage.json"
+
+
+@app.route("/api/daily-img-usage", methods=["GET"])
+def api_daily_img_usage():
+    """返回所有群今日已发图片数。"""
+    usage = {}
+    try:
+        if DAILY_USAGE_FILE.exists():
+            raw = json.loads(DAILY_USAGE_FILE.read_text(encoding="utf-8"))
+            today = datetime.now().strftime("%Y-%m-%d")
+            for key, count in raw.items():
+                date, gid = key.split("|", 1)
+                if date == today:
+                    usage[gid] = count
+    except Exception:
+        pass
+    return jsonify({"ok": True, "data": usage})
+
+
+# ── 启动前初始化 ──────────────────────────────────────
+# 在首次请求时初始化压缩器，避免启动时的文件锁冲突
+_compressor_hook_fired = False
+
+@app.before_request
+def _ensure_compressor_init():
+    global _compressor_hook_fired
+    if _compressor_hook_fired:
+        return
+    _compressor_hook_fired = True
+    _init_compressor_scheduler()
+    # 只执行一次，移除 hook
+    try:
+        app.before_request_funcs[None].remove(_ensure_compressor_init)
+    except (ValueError, KeyError):
+        pass
 
 
 # ── 启动 ─────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # 也可以在启动时直接初始化（before_request 也做了同样的事）
+    _init_compressor_scheduler()
     print(f"""
     ╔══════════════════════════════════╗
     ║  配置管理面板                     ║
