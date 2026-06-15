@@ -45,3 +45,4 @@ ncp/qqnt.json
 
 # Backups
 backup_*/
+.plugin_cmd.json

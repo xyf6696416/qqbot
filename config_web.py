@@ -499,7 +499,207 @@ def api_daily_img_usage():
     return jsonify({"ok": True, "data": usage})
 
 
-# ── 图片去重 API ────────────────────────────────────────
+# ── 插件管理 API ──────────────────────────────────────────
+
+PLUGIN_FLAG_FILE = BASE_DIR / ".plugin_cmd.json"
+PLUGINS_DIR = BASE_DIR / "mod" / "plugins"
+
+
+def _signal_plugin_cmd(cmds: list[dict]):
+    """向桥接进程发送插件命令（写标记文件）。"""
+    try:
+        PLUGIN_FLAG_FILE.write_text(
+            json.dumps(cmds, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        log.warning("PLUGIN_CMD_FLAG_ERR: %s", str(e)[:80])
+
+
+def _scan_plugins_from_disk() -> list[dict]:
+    """从文件系统扫描所有插件（不依赖 Bot 进程）。"""
+    result = []
+    if not PLUGINS_DIR.is_dir():
+        return result
+    for entry in sorted(PLUGINS_DIR.iterdir()):
+        if not entry.is_dir() or entry.name.startswith(("__", ".")):
+            continue
+        meta_file = entry / "metadata.yaml"
+        meta = {}
+        if meta_file.is_file():
+            try:
+                meta = yaml.safe_load(meta_file.read_text(encoding="utf-8")) or {}
+            except Exception:
+                meta = {}
+        result.append({
+            "name": meta.get("name", entry.name),
+            "dir": entry.name,
+            "display_name": meta.get("display_name", meta.get("name", entry.name)),
+            "version": meta.get("version", "?"),
+            "author": meta.get("author", "?"),
+            "description": meta.get("description", ""),
+            "enabled": meta.get("enabled", True),
+            "loaded": None,  # 跨进程无法确定
+            "handlers": [],
+        })
+    return result
+
+
+def _read_plugin_meta(plugin_dir: str) -> dict | None:
+    """读取单个插件的 metadata.yaml。"""
+    meta_file = PLUGINS_DIR / plugin_dir / "metadata.yaml"
+    if not meta_file.is_file():
+        return None
+    try:
+        return yaml.safe_load(meta_file.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+
+
+def _write_plugin_meta(plugin_dir: str, meta: dict) -> bool:
+    """写回单个插件的 metadata.yaml。"""
+    meta_file = PLUGINS_DIR / plugin_dir / "metadata.yaml"
+    try:
+        meta_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(meta_file, "w", encoding="utf-8") as f:
+            yaml.dump(meta, f, allow_unicode=True,
+                      default_flow_style=False, sort_keys=False)
+        return True
+    except Exception as e:
+        log.warning("PLUGIN_META_WRITE_ERR: %s", str(e)[:80])
+        return False
+
+
+@app.route("/api/plugins", methods=["GET"])
+def api_plugins_list():
+    """获取插件列表（扫描文件系统）。"""
+    plugins = _scan_plugins_from_disk()
+    return jsonify({
+        "ok": True,
+        "data": {
+            "count": len(plugins),
+            "plugins": plugins,
+        },
+    })
+
+
+@app.route("/api/plugins/info", methods=["POST"])
+def api_plugin_info():
+    """获取单个插件详细信息（从文件系统读取 metadata.yaml + main.py 信息）。"""
+    body = request.get_json(force=True)
+    plugin_name = body.get("name", "")
+    plugin_dir_name = body.get("dir", plugin_name)
+
+    # 尝试用目录名定位
+    if plugin_dir_name:
+        meta = _read_plugin_meta(plugin_dir_name)
+    else:
+        meta = _read_plugin_meta(plugin_name)
+        if meta is None:
+            # 按 name 查找
+            for entry in PLUGINS_DIR.iterdir():
+                if not entry.is_dir() or entry.name.startswith(("__", ".")):
+                    continue
+                m = _read_plugin_meta(entry.name)
+                if m and m.get("name") == plugin_name:
+                    meta = m
+                    plugin_dir_name = entry.name
+                    break
+
+    if meta is None:
+        return jsonify({"ok": False, "error": "插件未找到"})
+
+    # 检查 main.py 是否存在
+    main_py = PLUGINS_DIR / plugin_dir_name / "main.py"
+    main_py_exists = main_py.is_file()
+
+    return jsonify({
+        "ok": True,
+        "data": {
+            "name": meta.get("name", plugin_dir_name),
+            "dir": plugin_dir_name,
+            "display_name": meta.get("display_name", meta.get("name", plugin_dir_name)),
+            "version": meta.get("version", "?"),
+            "author": meta.get("author", "?"),
+            "description": meta.get("description", ""),
+            "enabled": meta.get("enabled", True),
+            "main_py_exists": main_py_exists,
+            "metadata": meta,
+        },
+    })
+
+
+@app.route("/api/plugins/<name>/reload", methods=["POST"])
+def api_plugin_reload(name):
+    """重载插件（通过命令标记文件通知桥接进程）。"""
+    # 先确认插件存在
+    found = False
+    for entry in PLUGINS_DIR.iterdir():
+        if not entry.is_dir() or entry.name.startswith(("__", ".")):
+            continue
+        m = _read_plugin_meta(entry.name)
+        if m and m.get("name") == name:
+            found = True
+            break
+        if entry.name == name:
+            found = True
+            break
+
+    if not found:
+        return jsonify({"ok": False, "error": f"插件 '{name}' 未找到"})
+
+    _signal_plugin_cmd([{"action": "reload", "plugin": name}])
+    return jsonify({"ok": True, "message": f"已发送重载命令给桥接进程: {name}"})
+
+
+@app.route("/api/plugins/<name>/toggle", methods=["POST"])
+def api_plugin_toggle(name):
+    """启用/禁用插件（修改 metadata.yaml + 通知桥接）。"""
+    # 查找插件
+    plugin_dir = None
+    for entry in PLUGINS_DIR.iterdir():
+        if not entry.is_dir() or entry.name.startswith(("__", ".")):
+            continue
+        m = _read_plugin_meta(entry.name)
+        if m and m.get("name") == name:
+            plugin_dir = entry.name
+            break
+        if entry.name == name:
+            plugin_dir = name
+            break
+
+    if not plugin_dir:
+        return jsonify({"ok": False, "error": f"插件 '{name}' 未找到"})
+
+    meta = _read_plugin_meta(plugin_dir)
+    if meta is None:
+        return jsonify({"ok": False, "error": "插件 metadata.yaml 读取失败"})
+
+    # 翻转 enabled 状态
+    meta["enabled"] = not meta.get("enabled", True)
+    new_status = "启用" if meta["enabled"] else "禁用"
+
+    if not _write_plugin_meta(plugin_dir, meta):
+        return jsonify({"ok": False, "error": "插件 metadata.yaml 写入失败"})
+
+    # 通知桥接重载（toggle 通过 reload + 读取 metadata 实现）
+    _signal_plugin_cmd([{"action": "reload", "plugin": name}])
+
+    return jsonify({
+        "ok": True,
+        "data": {"enabled": meta["enabled"]},
+        "message": f"插件 '{name}' 已{new_status}，将自动重载",
+    })
+
+
+@app.route("/api/plugins/reload-all", methods=["POST"])
+def api_plugins_reload_all():
+    """重载所有插件。"""
+    plugins = _scan_plugins_from_disk()
+    cmds = [{"action": "reload", "plugin": p["name"]} for p in plugins]
+    _signal_plugin_cmd(cmds)
+    return jsonify({
+        "ok": True,
+        "message": f"已发送 {len(cmds)} 个重载命令给桥接进程",
+    })
 
 
 @app.route("/api/dedup/status", methods=["GET"])

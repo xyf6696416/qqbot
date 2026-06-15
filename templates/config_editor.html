@@ -352,6 +352,7 @@
         <a data-page="settings"><span class="nav-icon">⚙️</span><span>基础设置</span></a>
         <a data-page="compressor"><span class="nav-icon">📦</span><span>图片压缩</span></a>
         <a data-page="dedup"><span class="nav-icon">🖼️</span><span>图片去重</span></a>
+        <a data-page="plugins"><span class="nav-icon">🧩</span><span>插件管理</span></a>
         <a data-page="raw"><span class="nav-icon">📄</span><span>原始 YAML</span></a>
     </nav>
     <div class="status-bar" id="sidebar-status">
@@ -772,6 +773,42 @@ C:\Users\Administrator\Desktop\AI生成"></textarea>
             </div>
         </div>
 
+        <!-- ═══ 插件管理 ═══ -->
+        <div class="page" id="page-plugins">
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <h3 style="margin:0;">🧩 插件管理</h3>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn btn-secondary btn-sm" onclick="reloadAllPlugins()">⟳ 重载全部</button>
+                        <button class="btn btn-secondary btn-sm" onclick="renderPlugins()">⟳ 刷新列表</button>
+                    </div>
+                </div>
+                <p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">
+                    插件存放在 <code>mod/plugins/</code> 目录下。安装新插件后自动发现，修改文件后自动热重载。
+                    操作通过命令标记通知桥接进程，状态为异步更新。
+                </p>
+            </div>
+
+            <div class="card">
+                <div id="plugin-loading" style="text-align:center;padding:20px;color:var(--text-muted);">加载中...</div>
+                <div id="plugin-error" style="display:none;text-align:center;padding:20px;color:var(--danger);"></div>
+                <div id="plugin-list" style="display:none;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                        <span id="plugin-count" style="font-size:12px;color:var(--text-muted);"></span>
+                    </div>
+                    <div id="plugin-table-container"></div>
+                </div>
+            </div>
+
+            <div class="card" id="plugin-detail-card" style="display:none;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <h3 id="plugin-detail-name" style="margin:0;"></h3>
+                    <button class="btn btn-secondary btn-sm" onclick="hidePluginDetail()">✕ 关闭</button>
+                </div>
+                <div id="plugin-detail-content" style="margin-top:12px;"></div>
+            </div>
+        </div>
+
     </div>
 </div>
 <div class="toast-container" id="toast-container"></div>
@@ -807,7 +844,7 @@ function switchPage(page, params) {
     if (el) el.classList.add('active');
     currentPage = page;
 
-    const titles = { dashboard:'仪表盘', groups:'群聊配置', 'group-detail':'编辑提示词', ai:'AI 后端', perms:'权限', settings:'基础设置', compressor:'图片压缩', dedup:'图片去重', raw:'原始 YAML' };
+    const titles = { dashboard:'仪表盘', groups:'群聊配置', 'group-detail':'编辑提示词', ai:'AI 后端', perms:'权限', settings:'基础设置', compressor:'图片压缩', dedup:'图片去重', plugins:'插件管理', raw:'原始 YAML' };
     document.getElementById('page-title').textContent = titles[page] || page;
 
     // page-specific render
@@ -815,6 +852,7 @@ function switchPage(page, params) {
     if (page === 'raw') loadRawYAML();
     if (page === 'compressor') renderCompressor();
     if (page === 'dedup') { loadDedupStatus(); if (!dedupPollInterval) dedupPollInterval = setInterval(loadDedupStatus, 5000); }
+    if (page === 'plugins') renderPlugins();
     if (page === 'group-detail' && params) openGroupDetail(params);
 }
 
@@ -1815,6 +1853,163 @@ document.addEventListener('keydown', function(e) {
         closePreviewModal();
     }
 });
+
+// ══════════════════════════════════════════════════════════════
+//  插件管理
+// ══════════════════════════════════════════════════════════════
+async function renderPlugins() {
+    const loading = document.getElementById('plugin-loading');
+    const errDiv = document.getElementById('plugin-error');
+    const listDiv = document.getElementById('plugin-list');
+    const container = document.getElementById('plugin-table-container');
+
+    loading.style.display = 'block';
+    errDiv.style.display = 'none';
+    listDiv.style.display = 'none';
+
+    try {
+        const resp = await fetch('/api/plugins');
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || '请求失败');
+
+        const plugins = data.data.plugins;
+        if (!plugins.length) {
+            loading.textContent = '📭 暂无插件，在 mod/plugins/ 下创建插件目录即可';
+            return;
+        }
+
+        loading.style.display = 'none';
+        listDiv.style.display = 'block';
+        document.getElementById('plugin-count').textContent = `共 ${plugins.length} 个插件`;
+
+        container.innerHTML = `
+        <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+                <tr style="border-bottom:2px solid var(--border-color);">
+                    <th style="text-align:left;padding:8px 6px;">名称</th>
+                    <th style="text-align:left;padding:8px 6px;">版本</th>
+                    <th style="text-align:left;padding:8px 6px;">作者</th>
+                    <th style="text-align:left;padding:8px 6px;">描述</th>
+                    <th style="text-align:center;padding:8px 6px;">状态</th>
+                    <th style="text-align:center;padding:8px 6px;">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${plugins.map(p => `
+                <tr style="border-bottom:1px solid var(--border-color);">
+                    <td style="padding:10px 6px;font-weight:500;">
+                        <span style="cursor:pointer;color:var(--accent);" onclick="showPluginDetail('${p.name}')">
+                            ${escHtml(p.display_name)}
+                        </span>
+                        <div style="font-size:11px;color:var(--text-muted);">${escHtml(p.name)}</div>
+                    </td>
+                    <td style="padding:10px 6px;">${escHtml(p.version)}</td>
+                    <td style="padding:10px 6px;">${escHtml(p.author)}</td>
+                    <td style="padding:10px 6px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:12px;">
+                        ${escHtml(p.description || '—')}
+                    </td>
+                    <td style="text-align:center;padding:10px 6px;">
+                        ${p.enabled
+                            ? '<span class="badge badge-green">启用</span>'
+                            : '<span class="badge badge-gray">禁用</span>'}
+                        <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">
+                            ${p.loaded === true ? '已加载' : p.loaded === false ? '未加载' : '未知'}
+                        </div>
+                    </td>
+                    <td style="text-align:center;padding:10px 6px;">
+                        <div style="display:flex;gap:4px;justify-content:center;">
+                            <button class="btn btn-sm" onclick="reloadPlugin('${p.name}')" style="font-size:11px;padding:3px 8px;">重载</button>
+                            <button class="btn btn-sm" onclick="togglePlugin('${p.name}')" style="font-size:11px;padding:3px 8px;">
+                                ${p.enabled ? '禁用' : '启用'}
+                            </button>
+                        </div>
+                        <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">
+                            ${p.handlers && p.handlers.length ? p.handlers.map(h => `<code style="font-size:9px;background:var(--bg-input);padding:1px 4px;border-radius:2px;">${h}</code>`).join(' ') : ''}
+                        </div>
+                    </td>
+                </tr>
+                `).join('')}
+            </tbody>
+        </table>
+        </div>`;
+    } catch (e) {
+        loading.style.display = 'none';
+        errDiv.style.display = 'block';
+        errDiv.textContent = '❌ 加载失败: ' + e.message;
+    }
+}
+
+async function reloadPlugin(name) {
+    try {
+        const resp = await fetch('/api/plugins/' + encodeURIComponent(name) + '/reload', { method: 'POST' });
+        const data = await resp.json();
+        showToast(data.message || data.error || '重载命令已发送', data.ok ? 'success' : 'error');
+    } catch (e) {
+        showToast('发送失败: ' + e.message, 'error');
+    }
+}
+
+async function reloadAllPlugins() {
+    try {
+        const resp = await fetch('/api/plugins/reload-all', { method: 'POST' });
+        const data = await resp.json();
+        showToast(data.message || '重载命令已发送', 'success');
+    } catch (e) {
+        showToast('发送失败: ' + e.message, 'error');
+    }
+}
+
+async function togglePlugin(name) {
+    try {
+        const resp = await fetch('/api/plugins/' + encodeURIComponent(name) + '/toggle', { method: 'POST' });
+        const data = await resp.json();
+        showToast(data.message || data.error || '切换命令已发送', data.ok ? 'success' : 'error');
+        if (data.ok) renderPlugins();
+    } catch (e) {
+        showToast('发送失败: ' + e.message, 'error');
+    }
+}
+
+async function showPluginDetail(name) {
+    const card = document.getElementById('plugin-detail-card');
+    const title = document.getElementById('plugin-detail-name');
+    const content = document.getElementById('plugin-detail-content');
+    card.style.display = 'block';
+    title.textContent = '📋 ' + name;
+
+    try {
+        const resp = await fetch('/api/plugins/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name })
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error);
+        const p = data.data;
+        content.innerHTML = `
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;">
+                <div><span style="color:var(--text-muted);">名称:</span> ${escHtml(p.display_name)}</div>
+                <div><span style="color:var(--text-muted);">标识:</span> <code>${escHtml(p.name)}</code></div>
+                <div><span style="color:var(--text-muted);">版本:</span> ${escHtml(p.version)}</div>
+                <div><span style="color:var(--text-muted);">作者:</span> ${escHtml(p.author)}</div>
+                <div><span style="color:var(--text-muted);">目录:</span> <code>mod/plugins/${escHtml(p.dir)}</code></div>
+                <div><span style="color:var(--text-muted);">入口:</span> ${p.main_py_exists ? '✅ main.py 存在' : '❌ main.py 缺失'}</div>
+                <div><span style="color:var(--text-muted);">启用:</span> ${p.enabled ? '✅ 是' : '❌ 否'}</div>
+            </div>
+            <div style="margin-top:10px;font-size:13px;">
+                <span style="color:var(--text-muted);">描述:</span> ${escHtml(p.description || '无')}
+            </div>
+            ${p.metadata ? '<div style="margin-top:10px;font-size:13px;"><span style="color:var(--text-muted);">metadata.yaml:</span><pre style="background:var(--bg-input);padding:8px;border-radius:4px;font-size:11px;overflow-x:auto;margin-top:4px;">' + escHtml(JSON.stringify(p.metadata, null, 2)) + '</pre></div>' : ''}
+        `;
+    } catch (e) {
+        content.innerHTML = '<span style="color:var(--danger);">加载失败: ' + e.message + '</span>';
+    }
+}
+
+function hidePluginDetail() {
+    document.getElementById('plugin-detail-card').style.display = 'none';
+}
 
 
 // ══════════════════════════════════════════════════════════════

@@ -126,6 +126,9 @@ class Bot:
         plugin_count = await self.plugin_manager.load_all()
         await self._bus.emit("bot_start", {"plugin_count": plugin_count})
         log.info("PLUGIN_SYSTEM: loaded %d plugin(s)", plugin_count)
+
+        # 热加载循环心跳
+        self._hot_reload_task = asyncio.create_task(self._hot_reload_loop())
         while not self._shutdown:
             try:
                 await self.connect()
@@ -140,6 +143,18 @@ class Bot:
                 if not self._shutdown:
                     log.error("Conn err: %s", e)
             await asyncio.sleep(5)
+
+    async def _hot_reload_loop(self):
+        """每 5 秒检查一次插件热加载和命令标记。"""
+        HOT_RELOAD_INTERVAL = 5
+        while not self._shutdown:
+            await asyncio.sleep(HOT_RELOAD_INTERVAL)
+            try:
+                n = await self.plugin_manager.check_hot_reload()
+                if n > 0:
+                    log.info("HOT_RELOAD: %d plugin(s) reloaded", n)
+            except Exception as e:
+                log.debug("HOT_RELOAD_LOOP_ERR: %s", str(e)[:100])
 
     async def connect(self):
         self._session = ClientSession()
@@ -2028,6 +2043,8 @@ class Bot:
         self._shutdown = True
         # 关闭插件
         await self._bus.emit("bot_shutdown", {})
+        if hasattr(self, '_hot_reload_task'):
+            self._hot_reload_task.cancel()
         await self.plugin_manager.unload_all()
         if self._send_worker_task:
             self._send_worker_task.cancel()
