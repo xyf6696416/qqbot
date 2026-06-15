@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Temp / cache files
+tc/1/
+tc/.pick_fwd_state.json
+.compressor_cache.json
+.daily_img_usage.json
+
+# Logs
+*.log
+bridge_test.log
+logs/
+
+# Runtime / config backups
+config.yaml.bak
+
+# Claude session files
+.claude/
+
+
+# NapCatQQ runtime (downloaded separately, may be in use)
+ncp/NapCat.44498.Shell/
+ncp/node_modules/
+ncp/native/
+ncp/static/
+ncp/plugins/
+ncp/worker/
+ncp/cache/
+ncp/*.exe
+ncp/*.dll
+ncp/*.zip
+ncp/qqnt.json
+
+# Backups
+backup_*/

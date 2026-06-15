@@ -1,0 +1,1828 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GreyWind 管理面板</title>
+    <style>
+        /* ── Xbox-Style Design System ── */
+        :root {
+            --bg-primary: #0e0e0e;
+            --bg-secondary: #1a1a1a;
+            --bg-card: #242424;
+            --bg-hover: #2d2d2d;
+            --bg-input: #1e1e1e;
+            --xbox-green: #107C10;
+            --xbox-green-bright: #9BF00B;
+            --xbox-green-hover: #0d6b0d;
+            --text-primary: #e8e8e8;
+            --text-secondary: #8a8a8a;
+            --text-muted: #5a5a5a;
+            --border-color: #333;
+            --border-focus: #107C10;
+            --danger: #c0392b;
+            --danger-hover: #a93226;
+            --shadow: 0 4px 20px rgba(0,0,0,0.4);
+            --radius: 8px;
+            --radius-sm: 4px;
+            --font: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+            --sidebar-width: 220px;
+            --header-height: 48px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-primary); }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+
+        html, body { height: 100%; }
+
+        body {
+            font-family: var(--font);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            display: flex;
+            overflow: hidden;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        /* ── Sidebar ── */
+        .sidebar {
+            width: var(--sidebar-width);
+            min-width: var(--sidebar-width);
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            user-select: none;
+        }
+        .sidebar .logo {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            height: var(--header-height);
+        }
+        .sidebar .logo .icon {
+            width: 22px; height: 22px;
+            background: var(--xbox-green);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: 700; color: #fff;
+        }
+        .sidebar .logo span { font-weight: 600; font-size: 14px; letter-spacing: 0.3px; }
+        .sidebar nav { flex: 1; padding: 8px 0; overflow-y: auto; }
+        .sidebar nav a {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 20px; color: var(--text-secondary);
+            text-decoration: none; cursor: pointer; font-size: 13px;
+            border-left: 3px solid transparent;
+            transition: all 0.15s;
+        }
+        .sidebar nav a:hover { color: var(--text-primary); background: var(--bg-hover); }
+        .sidebar nav a.active {
+            color: var(--xbox-green-bright);
+            border-left-color: var(--xbox-green);
+            background: rgba(16, 124, 16, 0.08);
+        }
+        .sidebar nav a .nav-icon { width: 20px; text-align: center; font-size: 15px; }
+        .sidebar .status-bar {
+            padding: 12px 20px;
+            border-top: 1px solid var(--border-color);
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .sidebar .status-bar .dot {
+            display: inline-block; width: 7px; height: 7px;
+            border-radius: 50%; margin-right: 5px;
+        }
+        .sidebar .status-bar .dot.on { background: var(--xbox-green); }
+        .sidebar .status-bar .dot.off { background: var(--danger); }
+
+        /* ── Main Content ── */
+        .main {
+            flex: 1;
+            display: flex; flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .main header {
+            height: var(--header-height);
+            padding: 0 24px;
+            display: flex; align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            flex-shrink: 0;
+        }
+        .main header h2 { font-size: 15px; font-weight: 600; }
+        .main header .actions { display: flex; gap: 8px; align-items: center; }
+        .content {
+            flex: 1; padding: 24px;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        /* ── Components ── */
+        .page { display: none; }
+        .page.active { display: block; }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .card h3 {
+            font-size: 13px; font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 16px;
+        }
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+
+        label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        input[type="text"], input[type="url"], input[type="number"], input[type="password"], select, textarea {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: var(--font);
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        input:focus, textarea:focus, select:focus { border-color: var(--border-focus); }
+        textarea { resize: vertical; min-height: 80px; font-size: 13px; line-height: 1.6; }
+        .field { margin-bottom: 14px; }
+
+        .btn {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 7px 16px; border: none; border-radius: var(--radius-sm);
+            font-size: 13px; font-weight: 500; cursor: pointer;
+            font-family: var(--font);
+            transition: all 0.15s;
+            text-decoration: none; white-space: nowrap;
+        }
+        .btn-primary { background: var(--xbox-green); color: #fff; }
+        .btn-primary:hover { background: var(--xbox-green-hover); }
+        .btn-secondary { background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-color); }
+        .btn-secondary:hover { background: #3a3a3a; }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-danger:hover { background: var(--danger-hover); }
+        .btn-warning { background: #b8860b; color: #fff; border: 1px solid #daa520; }
+        .btn-warning:hover { background: #9a7209; }
+        .btn-danger { background: var(--danger); color: #fff; border: 1px solid transparent; }
+        .btn-danger:hover { background: var(--danger-hover); }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn-icon { padding: 6px 8px; background: transparent; color: var(--text-secondary); border: none; cursor: pointer; font-size: 16px; border-radius: var(--radius-sm); }
+        .btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ── Progress Bar ── */
+        .progress-bar {
+            width: 100%; height: 6px;
+            background: var(--bg-input);
+            border-radius: 3px; overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: var(--xbox-green);
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        .toggle {
+            position: relative; display: inline-flex; align-items: center; gap: 8px;
+            cursor: pointer; user-select: none;
+        }
+        .toggle input { display: none; }
+        .toggle .slider {
+            width: 36px; height: 20px; background: #444;
+            border-radius: 10px; position: relative; transition: 0.2s;
+        }
+        .toggle .slider::after {
+            content: ''; position: absolute; top: 2px; left: 2px;
+            width: 16px; height: 16px; background: #888;
+            border-radius: 50%; transition: 0.2s;
+        }
+        .toggle input:checked + .slider { background: var(--xbox-green); }
+        .toggle input:checked + .slider::after { left: 18px; background: #fff; }
+
+        .tag-input {
+            display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+            background: var(--bg-input); border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm); padding: 4px 8px; min-height: 36px;
+        }
+        .tag-input:focus-within { border-color: var(--border-focus); }
+        .tag-input .tag {
+            display: inline-flex; align-items: center; gap: 4px;
+            background: rgba(16, 124, 16, 0.25); color: var(--xbox-green-bright);
+            font-size: 12px; padding: 2px 8px; border-radius: 3px;
+        }
+        .tag-input .tag .remove { cursor: pointer; opacity: 0.6; font-size: 14px; }
+        .tag-input .tag .remove:hover { opacity: 1; }
+        .tag-input input {
+            border: none; outline: none; flex: 1; min-width: 60px;
+            padding: 4px 0; background: transparent; color: inherit;
+            font-size: 13px;
+        }
+        .tag-add-row { display: flex; gap: 4px; margin-top: 4px; }
+
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 3px;
+            font-size: 11px; font-weight: 500;
+        }
+        .badge-green { background: rgba(16, 124, 16, 0.2); color: var(--xbox-green-bright); }
+        .badge-gray { background: #333; color: var(--text-secondary); }
+        .badge-red { background: rgba(192, 57, 43, 0.2); color: #e74c3c; }
+        .badge-blue { background: rgba(52, 152, 219, 0.2); color: #5dade2; }
+
+        /* ── Group List ── */
+        .group-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            display: flex; align-items: center; justify-content: space-between;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .group-card:hover { background: var(--bg-hover); border-color: #555; }
+        .group-card .info { display: flex; flex-direction: column; gap: 2px; }
+        .group-card .info .gid { font-size: 15px; font-weight: 600; }
+        .group-card .info .meta { font-size: 12px; color: var(--text-muted); }
+        .group-card .actions { display: flex; gap: 6px; align-items: center; }
+
+        /* ── Modal ── */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.75); z-index: 9999;
+            display: flex; align-items: center; justify-content: center;
+            backdrop-filter: blur(4px);
+        }
+        .modal-content {
+            background: transparent; border: none; padding: 0;
+        }
+
+        /* ── Toast ── */
+        .toast-container {
+            position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .toast {
+            padding: 10px 18px; border-radius: var(--radius-sm);
+            font-size: 13px; color: #fff;
+            opacity: 0; transform: translateY(10px);
+            transition: all 0.3s;
+            min-width: 200px;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.success { background: var(--xbox-green); }
+        .toast.warning { background: #b8860b; }
+        .toast.error { background: var(--danger); }
+
+        /* ── Group Detail ── */
+        .breadcrumb {
+            display: flex; align-items: center; gap: 6px;
+            font-size: 12px; color: var(--text-muted); margin-bottom: 16px;
+        }
+        .breadcrumb a { color: var(--text-secondary); cursor: pointer; text-decoration: none; }
+        .breadcrumb a:hover { color: var(--xbox-green-bright); }
+        .breadcrumb .sep { color: var(--text-muted); }
+
+        .prompt-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+        .file-input-wrapper { position: relative; }
+        .file-input-wrapper input[type="file"] {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
+        }
+        .prompt-stats { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
+        /* ── Dashboard ── */
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 20px;
+            text-align: center;
+        }
+        .stat-card .stat-value { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+        .stat-card .stat-label { font-size: 12px; color: var(--text-muted); }
+        .stat-card.online .stat-value { color: var(--xbox-green-bright); }
+        .stat-card.offline .stat-value { color: var(--danger); }
+
+        .raw-editor { font-family: 'Cascadia Code', 'JetBrains Mono', 'Consolas', monospace; font-size: 12px; min-height: 60vh; resize: vertical; tab-size: 2; }
+
+        @media (max-width: 768px) {
+            :root { --sidebar-width: 56px; }
+            .sidebar .logo span, .sidebar nav a span { display: none; }
+            .sidebar nav a { justify-content: center; padding: 12px; }
+            .sidebar .status-bar { display: none; }
+            .main header h2 { font-size: 13px; }
+            .content { padding: 16px; }
+            .card-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ── Sidebar ── -->
+<aside class="sidebar">
+    <div class="logo">
+        <div class="icon">G</div>
+        <span>GreyWind</span>
+    </div>
+    <nav>
+        <a class="active" data-page="dashboard"><span class="nav-icon">📊</span><span>仪表盘</span></a>
+        <a data-page="groups"><span class="nav-icon">💬</span><span>群聊配置</span></a>
+        <a data-page="ai"><span class="nav-icon">🤖</span><span>AI 后端</span></a>
+        <a data-page="perms"><span class="nav-icon">🔒</span><span>权限</span></a>
+        <a data-page="settings"><span class="nav-icon">⚙️</span><span>基础设置</span></a>
+        <a data-page="compressor"><span class="nav-icon">📦</span><span>图片压缩</span></a>
+        <a data-page="dedup"><span class="nav-icon">🖼️</span><span>图片去重</span></a>
+        <a data-page="raw"><span class="nav-icon">📄</span><span>原始 YAML</span></a>
+    </nav>
+    <div class="status-bar" id="sidebar-status">
+        <span class="dot off"></span>检查中...
+    </div>
+</aside>
+
+<!-- ── Main ── -->
+<div class="main">
+    <header>
+        <h2 id="page-title">仪表盘</h2>
+        <div class="actions">
+            <button class="btn btn-secondary btn-sm" onclick="refreshAll()">⟳ 刷新</button>
+            <button class="btn btn-primary btn-sm" onclick="saveConfig()">💾 保存</button>
+        </div>
+    </header>
+    <div class="content" id="content-area">
+
+        <!-- ═══ Dashboard ═══ -->
+        <div class="page active" id="page-dashboard">
+            <div class="card-grid" style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));">
+                <div class="stat-card" id="stat-napcat"><div class="stat-value">—</div><div class="stat-label">NapCat QQ</div></div>
+                <div class="stat-card" id="stat-bridge"><div class="stat-value">—</div><div class="stat-label">桥接</div></div>
+                <div class="stat-card" id="stat-img"><div class="stat-value">—</div><div class="stat-label">图床</div></div>
+                <div class="stat-card" id="stat-web"><div class="stat-value">—</div><div class="stat-label">配置后端</div></div>
+                <div class="stat-card" id="stat-groups"><div class="stat-value">—</div><div class="stat-label">已配群聊</div></div>
+            </div>
+
+            <div class="card" style="margin-top:16px;">
+                <h3>快速操作</h3>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="btn btn-secondary" onclick="switchPage('groups')">管理群聊</button>
+                    <button class="btn btn-secondary" onclick="switchPage('ai')">AI 配置</button>
+                    <button class="btn btn-secondary" onclick="switchPage('raw')">YAML 编辑</button>
+                    <button class="btn btn-danger btn-sm" onclick="restartBridge()">重启桥接</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>运行日志</h3>
+                <div id="live-log" style="font-size:12px;color:var(--text-muted);font-family:monospace;max-height:300px;overflow-y:auto;white-space:pre-wrap;line-height:1.4;">
+                    <span style="color:var(--text-muted)">启动日志查看器...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Groups List ═══ -->
+        <div class="page" id="page-groups">
+            <div id="groups-list"></div>
+            <div style="margin-top:12px;">
+                <button class="btn btn-secondary" onclick="addGroup()">＋ 添加群</button>
+            </div>
+        </div>
+
+        <!-- ═══ Group Detail ═══ -->
+        <div class="page" id="page-group-detail">
+            <div class="breadcrumb">
+                <a onclick="switchPage('groups')">群聊配置</a>
+                <span class="sep">›</span>
+                <span id="detail-gid-display"></span>
+            </div>
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                    <h3 style="margin:0;">群 <span id="detail-gid-label"></span></h3>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <label class="toggle" style="font-size:12px;">
+                            <span style="color:var(--text-secondary)">auto-clear</span>
+                            <input type="checkbox" id="detail-auto-clear">
+                            <span class="slider"></span>
+                        </label>
+                        <label class="toggle" style="font-size:12px;">
+                            <span style="color:var(--text-secondary)">定时色图</span>
+                            <input type="checkbox" id="detail-auto-se-tu">
+                            <span class="slider"></span>
+                        </label>
+                        <button class="btn btn-danger btn-sm" onclick="deleteCurrentGroup()">删除</button>
+                    </div>
+                </div>
+                <div class="card">
+                    <h3>发图限制</h3>
+                    <div class="field">
+                        <label>每日发图上限</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="number" id="detail-daily-img-limit" min="0" max="9999" value="0" style="width:120px;">
+                            <span style="color:var(--text-muted);font-size:12px;">0 = 不限制</span>
+                            <span id="detail-daily-usage" style="font-size:13px;margin-left:12px;"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="prompt-actions">
+                    <div class="file-input-wrapper">
+                        <button class="btn btn-secondary btn-sm">📂 导入提示词</button>
+                        <input type="file" id="prompt-file-input" accept=".txt,.md" onchange="loadPromptFile(event)">
+                    </div>
+                    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('detail-prompt').value='';updatePromptStats()">清空</button>
+                </div>
+                <div class="field">
+                    <label>系统提示词</label>
+                    <textarea id="detail-prompt" rows="12" oninput="updatePromptStats()" style="min-height:200px;"></textarea>
+                    <div class="prompt-stats">
+                        <span id="prompt-chars">0</span> 字,
+                        <span id="prompt-lines">0</span> 行
+                        <span id="prompt-source" style="margin-left:12px;"></span>
+                    </div>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:8px;">
+                    <button class="btn btn-primary" onclick="saveGroupDetail()">保存此群配置</button>
+                    <button class="btn btn-secondary" onclick="switchPage('groups')">返回列表</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ AI Backend ═══ -->
+        <div class="page" id="page-ai">
+            <div class="card">
+                <h3>SiliconFlow</h3>
+                <div class="field"><label>聊天模型</label><input type="text" id="sf_chat_model" placeholder="Qwen/Qwen2.5-14B-Instruct"></div>
+            </div>
+            <div class="card">
+                <h3>AI 生图</h3>
+                <div class="field"><label>每用户每日上限</label><input type="number" id="gen_img_limit" min="1" max="999"></div>
+                <div class="field"><label>默认分辨率</label>
+                    <select id="gen_img_size">
+                        <option value="auto">auto（默认，由模型决定）</option>
+                        <option value="1024x1024">1024×1024</option>
+                        <option value="1536x1024">1536×1024（横版）</option>
+                        <option value="1024x1536">1024×1536（竖版）</option>
+                        <option value="2048x2048">2048×2048（2K）</option>
+                        <option value="3840x2160">3840×2160（4K）</option>
+                    </select>
+                </div>
+                <div class="field"><label>默认质量</label>
+                    <select id="gen_img_quality">
+                        <option value="auto">auto（默认）</option>
+                        <option value="low">low（低）</option>
+                        <option value="medium">medium（中）</option>
+                        <option value="high">high（高）</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Permissions ═══ -->
+        <div class="page" id="page-perms">
+            <div class="card">
+                <h3>管理员 UID</h3>
+                <div class="tag-input" id="admin_tags"></div>
+                <div class="tag-add-row"><input type="text" id="admin_new" placeholder="输入 UID 按回车"><button class="btn btn-secondary btn-sm" onclick="addTag('admin')">添加</button></div>
+            </div>
+            <div class="card">
+                <h3>自动清空群</h3>
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">名单内的群每次回复后自动清除 session，不保留连续对话</p>
+                <div class="tag-input" id="auto_clear_tags"></div>
+                <div class="tag-add-row"><input type="text" id="auto_clear_new" placeholder="群号"><button class="btn btn-secondary btn-sm" onclick="addTag('auto_clear')">添加</button></div>
+            </div>
+            <div class="card">
+                <h3>禁止操作关键词</h3>
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">非管理员触发时拦截</p>
+                <div class="tag-input" id="forbidden_tags"></div>
+                <div class="tag-add-row"><input type="text" id="forbidden_new" placeholder="输入关键词"><button class="btn btn-secondary btn-sm" onclick="addTag('forbidden')">添加</button></div>
+            </div>
+        </div>
+
+        <!-- ═══ Settings ═══ -->
+        <div class="page" id="page-settings">
+            <div class="card">
+                <h3>通用</h3>
+                <div class="field"><label>机器人名称</label><input type="text" id="bot_name" placeholder="灰风"></div>
+                <div class="field"><label>NapCat WebSocket 地址</label><input type="text" id="napcat_ws_url" placeholder="ws://127.0.0.1:18888"></div>
+            </div>
+            <div class="card">
+                <h3>触发关键词</h3>
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">群聊中提到这些词时机器人会回复</p>
+                <div class="tag-input" id="trigger_tags"></div>
+                <div class="tag-add-row"><input type="text" id="trigger_new" placeholder="输入关键词按回车"><button class="btn btn-secondary btn-sm" onclick="addTag('trigger')">添加</button></div>
+            </div>
+            <div class="card">
+                <h3>选图模式</h3>
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">发图时从文件夹选取图片的规则</p>
+                <div style="display:flex;gap:12px;">
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                        <input type="radio" name="pick_mode" value="shuffle" onchange="updatePickMode('shuffle')">
+                        <span>纯随机</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                        <input type="radio" name="pick_mode" value="newest" onchange="updatePickMode('newest')">
+                        <span>最新优先</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                        <input type="radio" name="pick_mode" value="random" onchange="updatePickMode('random')">
+                        <span>随机顺序窗</span>
+                    </label>
+                </div>
+            </div>
+            <div class="card">
+                <h3>选图跳跃</h3>
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">从最新开始每隔 N 张选一张，避免同质化。仅 newest 模式生效。设为 0 不跳跃。</p>
+                <div class="field">
+                    <label>跳跃步数 (pick_skip)</label>
+                    <input type="number" id="pick_skip" min="0" max="99" value="0" style="width:100px;">
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Raw YAML ═══ -->
+        <div class="page" id="page-raw">
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">直接编辑 config.yaml。格式错误会导致配置无法加载。</p>
+            <textarea class="raw-editor" id="raw-editor" spellcheck="false"></textarea>
+        </div>
+
+        <!-- ═══ Image Compressor ═══ -->
+        <div class="page" id="page-compressor">
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <h3 style="margin:0;">图片压缩扫描</h3>
+                    <label class="toggle" style="font-size:12px;">
+                        <span>启用定时压缩</span>
+                        <input type="checkbox" id="comp-enabled">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">
+                    自动扫描目录中的图片，将超过阈值的文件压缩至阈值以内，原地替换原文件。
+                    每 <span id="comp-interval-display">30</span> 分钟执行一次。
+                </p>
+            </div>
+
+            <div class="card-grid" style="grid-template-columns: 1fr 1fr;">
+                <div class="card">
+                    <h3>压缩配置</h3>
+                    <div class="field">
+                        <label>扫描目录（每行一个）</label>
+                        <textarea id="comp-scan-dirs" rows="4" placeholder="C:\Users\Administrator\Desktop\napcat-greywind\tc\1
+C:\Users\Administrator\Desktop\AI生成"></textarea>
+                    </div>
+                    <div class="field">
+                        <label>压缩阈值</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="number" id="comp-max-size" min="50" max="10240" value="500" style="width:100px;">
+                            <span style="color:var(--text-muted);font-size:12px;">KB（超过此大小将被压缩）</span>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label>执行间隔</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="number" id="comp-interval" min="5" max="1440" value="30" style="width:80px;">
+                            <span style="color:var(--text-muted);font-size:12px;">分钟</span>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:12px;">
+                        <button class="btn btn-primary" onclick="saveCompressorConfig()">💾 保存配置</button>
+                        <button class="btn btn-secondary" onclick="runCompressorNow()">▶ 立即执行</button>
+                    </div>
+                    <hr style="border-color:var(--border-color);margin:16px 0;">
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <button class="btn btn-warning" onclick="renameFiles()">🔄 一键重命名</button>
+                        <span style="font-size:11px;color:var(--text-muted);">将图片按保存时间重命名为日期+序号格式</span>
+                    </div>
+                </div>
+                <div class="card">
+                    <h3>运行状态</h3>
+                    <div id="comp-status-area">
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">状态</span>
+                            <span id="comp-running"><span class="badge badge-gray">就绪</span></span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">上次执行</span>
+                            <span id="comp-last-run">—</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">耗时</span>
+                            <span id="comp-duration">—</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">累计节省</span>
+                            <span id="comp-saved" style="color:var(--xbox-green-bright);">0 MB</span>
+                        </div>
+                        <hr style="border-color:var(--border-color);margin:8px 0;">
+                        <div id="comp-stats" style="display:flex;gap:12px;flex-wrap:wrap;">
+                            <span style="font-size:12px;color:var(--text-muted);">扫描: <b id="comp-scanned" style="color:var(--text-primary);">0</b></span>
+                            <span style="font-size:12px;color:var(--text-muted);">压缩: <b id="comp-compressed" style="color:var(--xbox-green-bright);">0</b></span>
+                            <span style="font-size:12px;color:var(--text-muted);">跳过: <b id="comp-skipped" style="color:var(--text-muted);">0</b></span>
+                            <span style="font-size:12px;color:var(--text-muted);">错误: <b id="comp-errors" style="color:var(--danger);">0</b></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>最近压缩记录</h3>
+                <div id="comp-results" style="font-size:12px;color:var(--text-muted);max-height:300px;overflow-y:auto;">
+                    <span style="color:var(--text-muted)">暂无记录</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>历史运行</h3>
+                <div id="comp-history" style="font-size:12px;max-height:200px;overflow-y:auto;">
+                    <span style="color:var(--text-muted)">暂无历史</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Image Dedup ═══ -->
+        <div class="page" id="page-dedup">
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <h3 style="margin:0;">🖼️ 图片去重</h3>
+                    <span id="dedup-status-badge"><span class="badge badge-gray">就绪</span></span>
+                </div>
+                <p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">
+                    基于 phash（感知哈希）整图去重，汉明距离 ≤ 5 判为重复。
+                    扫描结果需人工审核确认后才执行删除，禁止未经审核的自动删除。
+                    数据库文件随图片目录迁移：<code style="font-size:11px;background:var(--bg-input);padding:2px 6px;border-radius:3px;">~/Desktop/转发图片/gallery_hashes.db</code>
+                </p>
+            </div>
+
+            <div class="card-grid" style="grid-template-columns: 1fr 1fr;">
+                <div class="card">
+                    <h3>操作</h3>
+                    <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px;">
+                        <div>
+                            <button class="btn btn-primary" onclick="startDedupScan()" id="dedup-scan-btn">
+                                🔍 全量扫描去重
+                            </button>
+                            <span style="font-size:11px;color:var(--text-muted);margin-left:8px;">
+                                遍历 ~/Desktop/转发图片/，压缩后计算指纹，找出重复图片
+                            </span>
+                        </div>
+                        <div>
+                            <button class="btn btn-secondary" onclick="runDedupPrune()" id="dedup-prune-btn">
+                                🗑️ 清理失效记录
+                            </button>
+                            <span style="font-size:11px;color:var(--text-muted);margin-left:8px;">
+                                移除去重库中已被手动删除图片的残留记录
+                            </span>
+                        </div>
+                    </div>
+                    <hr style="border-color:var(--border-color);margin:16px 0;">
+                    <div id="dedup-scan-progress" style="display:none;">
+                        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+                            <span id="dedup-progress-text">扫描中...</span>
+                            <span id="dedup-progress-pct">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="dedup-progress-fill" style="width:0%"></div>
+                        </div>
+                        <div id="dedup-current-file" style="font-size:11px;color:var(--text-muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <h3>去重库状态</h3>
+                    <div id="dedup-status-area">
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">已记录文件</span>
+                            <span id="dedup-records" style="color:var(--text-primary);font-weight:600;">—</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">唯一指纹</span>
+                            <span id="dedup-unique-hashes" style="color:var(--text-primary);">—</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+                            <span style="color:var(--text-muted);">数据库路径</span>
+                            <span id="dedup-db-path" style="font-size:11px;color:var(--text-secondary);word-break:break-all;">—</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── 扫描结果 + 审核区 ── -->
+            <div id="dedup-scan-result-section" style="display:none;">
+                <div class="card">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <h3 style="margin:0;">📋 最近扫描结果</h3>
+                        <span id="dedup-scan-time" style="font-size:11px;color:var(--text-muted);"></span>
+                    </div>
+                    <div id="dedup-scan-stats" style="margin-top:8px;font-size:13px;"></div>
+                </div>
+
+                <div id="dedup-audit-section" style="display:none;">
+                    <div class="card" style="border-left:3px solid var(--xbox-green);">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <h3 style="margin:0;">🔍 重复文件审核</h3>
+                            <span id="dedup-audit-summary" style="font-size:12px;color:var(--text-muted);"></span>
+                        </div>
+                        <p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">
+                            每组中默认保留最旧的文件（绿色标记），其余勾选为待删除。
+                        </p>
+                        <div style="display:flex;gap:8px;margin-top:10px;">
+                            <button class="btn btn-primary" onclick="quickDedupAll()" id="dedup-quick-btn" style="font-size:13px;">
+                                ⚡ 一键去重
+                            </button>
+                            <span style="font-size:11px;color:var(--text-muted);align-self:center;">
+                                按默认规则（每组保留最旧一张）直接执行，不再逐组确认
+                            </span>
+                        </div>
+                    </div>
+
+                    <div id="dedup-pagination" style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;">
+                        <button class="btn btn-secondary btn-sm" onclick="prevDupPage()" id="dup-prev-btn" disabled>← 上一页</button>
+                        <span id="dup-page-info" style="font-size:12px;color:var(--text-muted);">第 1/1 页</span>
+                        <button class="btn btn-secondary btn-sm" onclick="nextDupPage()" id="dup-next-btn" disabled>下一页 →</button>
+                    </div>
+
+                    <div id="dedup-groups-container"></div>
+
+                    <div class="card" id="dedup-actions-bar" style="text-align:center;">
+                        <button class="btn btn-danger" onclick="confirmDeleteDuplicates()" id="dedup-delete-btn" style="padding:10px 32px;font-size:14px;">
+                            🗑️ 确认删除选中文件
+                        </button>
+                        <span style="font-size:11px;color:var(--text-muted);margin-left:12px;">
+                            删除操作不可撤销
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+<div class="toast-container" id="toast-container"></div>
+
+<!-- ── 图片预览弹窗 ── -->
+<div class="modal-overlay" id="preview-modal" style="display:none;" onclick="closePreviewModal()">
+    <div class="modal-content" onclick="event.stopPropagation()" style="position:relative;display:inline-block;max-width:90vw;max-height:90vh;">
+        <button class="modal-close" onclick="closePreviewModal()" style="position:absolute;top:-12px;right:-12px;width:30px;height:30px;border-radius:50%;border:none;background:var(--bg-card);color:var(--text-primary);font-size:16px;cursor:pointer;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,0.5);">✕</button>
+        <img id="preview-modal-img" src="" alt="预览" style="max-width:90vw;max-height:85vh;display:block;border-radius:6px;box-shadow:0 8px 40px rgba(0,0,0,0.6);">
+    </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+//  State
+// ══════════════════════════════════════════════════════════════
+let config = {};
+let currentPage = 'dashboard';
+let currentEditGid = null;  // which group is being edited in detail page
+let dailyUsage = {};  // {gid: count}
+
+// ══════════════════════════════════════════════════════════════
+//  Navigation
+// ══════════════════════════════════════════════════════════════
+document.querySelectorAll('.sidebar nav a').forEach(a => {
+    a.addEventListener('click', () => switchPage(a.dataset.page));
+});
+
+function switchPage(page, params) {
+    document.querySelectorAll('.sidebar nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    const el = document.getElementById('page-' + page);
+    if (el) el.classList.add('active');
+    currentPage = page;
+
+    const titles = { dashboard:'仪表盘', groups:'群聊配置', 'group-detail':'编辑提示词', ai:'AI 后端', perms:'权限', settings:'基础设置', compressor:'图片压缩', dedup:'图片去重', raw:'原始 YAML' };
+    document.getElementById('page-title').textContent = titles[page] || page;
+
+    // page-specific render
+    if (page === 'groups') renderGroups();
+    if (page === 'raw') loadRawYAML();
+    if (page === 'compressor') renderCompressor();
+    if (page === 'dedup') { loadDedupStatus(); if (!dedupPollInterval) dedupPollInterval = setInterval(loadDedupStatus, 5000); }
+    if (page === 'group-detail' && params) openGroupDetail(params);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Toast
+// ══════════════════════════════════════════════════════════════
+function showToast(msg, type = 'success') {
+    const c = document.getElementById('toast-container');
+    const el = document.createElement('div');
+    el.className = 'toast ' + type + ' show';
+    el.textContent = msg;
+    c.appendChild(el);
+    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3000);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Tag Input
+// ══════════════════════════════════════════════════════════════
+const tagConfigs = {
+    admin:     { inputId:'admin_new',       containerId:'admin_tags',       key:'admin_uids' },
+    auto_clear:{ inputId:'auto_clear_new',  containerId:'auto_clear_tags',  key:'auto_clear_groups' },
+    forbidden: { inputId:'forbidden_new',   containerId:'forbidden_tags',   key:'forbidden_ops' },
+    trigger:   { inputId:'trigger_new',     containerId:'trigger_tags',     key:'trigger_keywords' },
+};
+
+function addTag(name) {
+    const cfg = tagConfigs[name];
+    if (!cfg) return;
+    const input = document.getElementById(cfg.inputId);
+    const v = input.value.trim();
+    if (!v) return;
+    if (!config[cfg.key]) config[cfg.key] = [];
+    if (!config[cfg.key].includes(v)) config[cfg.key].push(v);
+    input.value = '';
+    renderTag(name);
+}
+
+function renderTag(name) {
+    const cfg = tagConfigs[name];
+    if (!cfg) return;
+    const container = document.getElementById(cfg.containerId);
+    const list = config[cfg.key] || [];
+    container.innerHTML = list.map((v, i) =>
+        `<span class="tag">${escHtml(v)} <span class="remove" data-name="${name}" data-i="${i}">✕</span></span>`
+    ).join('');
+    container.querySelectorAll('.remove').forEach(el => {
+        el.addEventListener('click', () => {
+            const n = el.dataset.name;
+            const idx = parseInt(el.dataset.i);
+            const c = tagConfigs[n];
+            if (c && config[c.key]) config[c.key].splice(idx, 1);
+            renderTag(n);
+        });
+    });
+}
+
+// Enter key for tag inputs
+document.querySelectorAll('.tag-add-row input').forEach(inp => {
+    inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const parent = inp.closest('.tag-add-row');
+            const btn = parent.querySelector('button');
+            if (btn) btn.click();
+        }
+    });
+});
+
+// ══════════════════════════════════════════════════════════════
+//  API Calls
+// ══════════════════════════════════════════════════════════════
+async function apiGet(path) {
+    const r = await fetch(path); return r.json();
+}
+async function apiPost(path, data) {
+    const r = await fetch(path, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(data)
+    });
+    return r.json();
+}
+
+async function loadConfig() {
+    try {
+        const j = await apiGet('/api/config');
+        if (!j.ok) { showToast('加载失败: ' + j.error, 'error'); return; }
+        config = j.data;
+        // defaults
+        for (const k of ['trigger_keywords','admin_uids','auto_clear_groups','forbidden_ops']) {
+            if (!config[k]) config[k] = [];
+        }
+        if (!config.groups) config.groups = {};
+        // render all
+        renderTag('trigger'); renderTag('admin'); renderTag('auto_clear'); renderTag('forbidden');
+        renderSettings();
+        renderAI();
+        await loadDailyUsage();
+        renderGroups();
+        updateDashboard();
+    } catch(e) { showToast('加载失败: ' + e.message, 'error'); }
+}
+
+async function saveConfig() {
+    // collect form data from current page
+    if (currentPage === 'settings') readSettings();
+    if (currentPage === 'ai') readAI();
+    if (currentPage === 'perms') readPerms();
+    if (currentPage === 'group-detail') readGroupDetail();
+
+    let body = config;
+    let url = '/api/config';
+    let isRaw = false;
+
+    if (currentPage === 'raw') {
+        url = '/api/config/raw';
+        body = { yaml: document.getElementById('raw-editor').value };
+        isRaw = true;
+    }
+
+    try {
+        const j = await apiPost(url, body);
+        showToast(j.message || (j.ok ? '保存成功' : '保存失败'), j.ok ? 'success' : 'error');
+        if (j.ok && !isRaw) {
+            document.getElementById('page-title').textContent = document.getElementById('page-title').textContent.replace(/ \*$/, '') + ' ✓';
+        }
+        if (j.ok) await loadConfig();
+    } catch(e) { showToast('保存失败: ' + e.message, 'error'); }
+}
+
+// Ctrl+S
+document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveConfig(); }
+});
+
+// ══════════════════════════════════════════════════════════════
+//  Settings Page
+// ══════════════════════════════════════════════════════════════
+function renderSettings() {
+    document.getElementById('bot_name').value = config.bot_name || '';
+    document.getElementById('napcat_ws_url').value = (config.napcat && config.napcat.ws_url) || '';
+    // 选图模式
+    const mode = config.pick_mode || 'random';
+    document.querySelectorAll('input[name="pick_mode"]').forEach(r => r.checked = r.value === mode);
+    // 选图跳跃
+    document.getElementById('pick_skip').value = config.pick_skip ?? 0;
+}
+
+function readSettings() {
+    config.bot_name = document.getElementById('bot_name').value.trim();
+    if (!config.napcat) config.napcat = {};
+    config.napcat.ws_url = document.getElementById('napcat_ws_url').value.trim();
+    // 选图模式已通过 updatePickMode 实时写入 config
+    // 选图跳跃
+    const skip = parseInt(document.getElementById('pick_skip').value);
+    config.pick_skip = (skip > 0) ? skip : 0;
+}
+
+function updatePickMode(mode) {
+    config.pick_mode = mode;
+    saveConfig();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  AI Page
+// ══════════════════════════════════════════════════════════════
+function renderAI() {
+    document.getElementById('sf_chat_model').value = (config.siliconflow && config.siliconflow.chat_model) || '';
+    document.getElementById('gen_img_limit').value = (config.gen_img && config.gen_img.daily_limit) ?? 99;
+    document.getElementById('gen_img_size').value = (config.gen_img && config.gen_img.size) || 'auto';
+    document.getElementById('gen_img_quality').value = (config.gen_img && config.gen_img.quality) || 'auto';
+}
+
+// 每日发图上限输入变化时更新用量显示
+document.addEventListener('input', e => {
+    if (e.target.id === 'detail-daily-img-limit' && currentEditGid) {
+        updateDailyUsageDisplay(currentEditGid);
+    }
+});
+
+function readAI() {
+    if (!config.siliconflow) config.siliconflow = {};
+    config.siliconflow.chat_model = document.getElementById('sf_chat_model').value.trim();
+    if (!config.gen_img) config.gen_img = {};
+    config.gen_img.daily_limit = parseInt(document.getElementById('gen_img_limit').value) || 99;
+    config.gen_img.size = document.getElementById('gen_img_size').value;
+    if (config.gen_img.size === 'auto') delete config.gen_img.size;
+    config.gen_img.quality = document.getElementById('gen_img_quality').value;
+    if (config.gen_img.quality === 'auto') delete config.gen_img.quality;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Permissions Page
+// ══════════════════════════════════════════════════════════════
+function readPerms() {}  // tags are already in config object via addTag/remove
+
+// ══════════════════════════════════════════════════════════════
+//  Daily Usage
+// ══════════════════════════════════════════════════════════════
+
+async function loadDailyUsage() {
+    try {
+        const j = await apiGet('/api/daily-img-usage');
+        if (j.ok) dailyUsage = j.data || {};
+    } catch(e) { /* ignore */ }
+}
+
+function updateDailyUsageDisplay(gid) {
+    const el = document.getElementById('detail-daily-usage');
+    if (!el) return;
+    const limit = parseInt(document.getElementById('detail-daily-img-limit').value) || 0;
+    const used = dailyUsage[gid] || 0;
+    if (limit > 0) {
+        const pct = Math.min(100, Math.round(used / limit * 100));
+        el.textContent = `已发 ${used} / ${limit} 张 (${pct}%)`;
+        el.style.color = used >= limit ? 'var(--danger)' : 'var(--xbox-green-bright)';
+    } else {
+        el.textContent = used > 0 ? `今日已发 ${used} 张` : '';
+        el.style.color = 'var(--text-secondary)';
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Groups
+// ══════════════════════════════════════════════════════════════
+function renderGroups() {
+    const container = document.getElementById('groups-list');
+    const groups = config.groups || {};
+    const autoClear = new Set(config.auto_clear_groups || []);
+    const keys = Object.keys(groups);
+    if (keys.length === 0) {
+        container.innerHTML = '<div class="card" style="text-align:center;color:var(--text-muted);padding:40px;">还没有配置群聊，点击下方添加</div>';
+        return;
+    }
+    container.innerHTML = keys.map(gid => {
+        const prompt = groups[gid].prompt || '';
+        const preview = prompt.replace(/\n+/g, ' ').substring(0, 80) + (prompt.length > 80 ? '…' : '');
+        const ac = autoClear.has(gid);
+        return `<div class="group-card" onclick="switchPage('group-detail','${gid}')">
+            <div class="info">
+                <div class="gid">${escHtml(gid)}</div>
+                <div class="meta">${preview || '<span style="color:var(--danger)">未设置提示词</span>'}</div>
+                <div style="display:flex;gap:6px;margin-top:4px;">
+                    <span class="badge ${ac ? 'badge-green' : 'badge-gray'}">${ac ? 'auto-clear' : '持久会话'}</span>
+                    <span class="badge ${groups[gid].auto_se_tu ? 'badge-green' : 'badge-gray'}">${groups[gid].auto_se_tu ? '定时色图' : '手动'}</span>
+                    <span class="badge badge-gray">${groups[gid].daily_img_limit ? '每日' + groups[gid].daily_img_limit + '张' : '无限'}</span>
+                    <span class="badge ${dailyUsage[gid] > 0 ? 'badge-green' : 'badge-gray'}">今日 ${dailyUsage[gid] || 0} 张</span>
+                    <span class="badge badge-gray">${prompt.length} 字</span>
+                </div>
+            </div>
+            <div class="actions">
+                <span style="color:var(--text-muted);font-size:18px;">›</span>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function addGroup() {
+    const gid = prompt('输入群号:');
+    if (!gid || !/^\d+$/.test(gid)) return;
+    if (config.groups && config.groups[gid]) { showToast('群 ' + gid + ' 已存在', 'error'); return; }
+    if (!config.groups) config.groups = {};
+    config.groups[gid] = { prompt: 'QQ群聊机器人。像真人聊天，30字以内。' };
+    saveConfig();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Group Detail
+// ══════════════════════════════════════════════════════════════
+function openGroupDetail(gid) {
+    currentEditGid = gid;
+    const group = (config.groups && config.groups[gid]) || { prompt: '' };
+    document.getElementById('detail-gid-display').textContent = '群 ' + gid;
+    document.getElementById('detail-gid-label').textContent = gid;
+    document.getElementById('detail-prompt').value = group.prompt || '';
+    const autoClear = new Set(config.auto_clear_groups || []);
+    document.getElementById('detail-auto-clear').checked = autoClear.has(gid);
+    document.getElementById('detail-auto-se-tu').checked = group.auto_se_tu === true;
+    document.getElementById('detail-daily-img-limit').value = group.daily_img_limit ?? 0;
+    updateDailyUsageDisplay(gid);
+    updatePromptStats();
+}
+
+function updatePromptStats() {
+    const val = document.getElementById('detail-prompt').value;
+    document.getElementById('prompt-chars').textContent = val.length;
+    document.getElementById('prompt-lines').textContent = val.split('\n').length;
+}
+
+function readGroupDetail() {
+    if (!currentEditGid || !config.groups) return;
+    const gid = currentEditGid;
+    config.groups[gid] = config.groups[gid] || {};
+    config.groups[gid].prompt = document.getElementById('detail-prompt').value;
+    config.groups[gid].auto_se_tu = document.getElementById('detail-auto-se-tu').checked || undefined;
+    const limit = parseInt(document.getElementById('detail-daily-img-limit').value);
+    config.groups[gid].daily_img_limit = (limit > 0) ? limit : undefined;
+
+    const autoClear = new Set(config.auto_clear_groups || []);
+    if (document.getElementById('detail-auto-clear').checked) {
+        if (!config.auto_clear_groups) config.auto_clear_groups = [];
+        if (!config.auto_clear_groups.includes(gid)) config.auto_clear_groups.push(gid);
+    } else {
+        if (config.auto_clear_groups) config.auto_clear_groups = config.auto_clear_groups.filter(x => x !== gid);
+    }
+}
+
+function saveGroupDetail() {
+    readGroupDetail();
+    saveConfig();
+}
+
+function deleteCurrentGroup() {
+    if (!currentEditGid || !config.groups) return;
+    if (!confirm(`确定删除群 ${currentEditGid} 的配置？`)) return;
+    delete config.groups[currentEditGid];
+    if (config.auto_clear_groups) {
+        config.auto_clear_groups = config.auto_clear_groups.filter(x => x !== currentEditGid);
+    }
+    switchPage('groups');
+    saveConfig();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  File Import (txt/md)
+// ══════════════════════════════════════════════════════════════
+function loadPromptFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (ext !== 'txt' && ext !== 'md') {
+        showToast('仅支持 .txt 和 .md 文件', 'error');
+        event.target.value = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        document.getElementById('detail-prompt').value = e.target.result;
+        updatePromptStats();
+        document.getElementById('prompt-source').textContent = '📄 ' + file.name;
+        showToast('已加载 ' + file.name);
+    };
+    reader.onerror = () => { showToast('读取文件失败', 'error'); };
+    reader.readAsText(file);
+    event.target.value = '';
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Dashboard
+// ══════════════════════════════════════════════════════════════
+async function updateDashboard() {
+    try {
+        const j = await apiGet('/api/status');
+        const d = j.data || {};
+        function setStatus(id, running, labelOn='运行中', labelOff='已停止') {
+            const el = document.getElementById(id);
+            el.className = 'stat-card ' + (running ? 'online' : 'offline');
+            el.querySelector('.stat-value').textContent = running ? labelOn : labelOff;
+        }
+
+        setStatus('stat-napcat', d.napcat_running || d.napcat_port_open);
+        setStatus('stat-bridge', d.bridge_running);
+        setStatus('stat-img', d.img_server_running || d.img_port_open, '在线', '离线');
+        setStatus('stat-web', d.config_web_running, '运行中', '异常');
+        document.getElementById('stat-groups').querySelector('.stat-value').textContent =
+            Object.keys(config.groups || {}).length;
+
+        // sidebar 总体状态
+        const allOk = d.napcat_running && d.bridge_running && (d.img_server_running || d.img_port_open) && d.config_web_running;
+        const sb = document.getElementById('sidebar-status');
+        const parts = [];
+        if (d.napcat_running) parts.push('NapCat ✓');
+        if (d.bridge_running) parts.push('桥接 ✓');
+        if (d.img_port_open) parts.push('图床 ✓');
+        sb.innerHTML = '<span class="dot ' + (allOk ? 'on' : 'off') + '"></span>' +
+            (allOk ? '全部在线' : parts.join(' ') || '部分离线');
+    } catch(e) {
+        document.getElementById('sidebar-status').innerHTML = '<span class="dot off"></span>连接失败';
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Restart
+// ══════════════════════════════════════════════════════════════
+async function restartBridge() {
+    if (!confirm('确定要重启桥接吗？')) return;
+    const j = await apiPost('/api/restart', {});
+    showToast(j.message, j.ok ? 'success' : 'error');
+    setTimeout(updateDashboard, 3000);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Raw YAML
+// ══════════════════════════════════════════════════════════════
+async function loadRawYAML() {
+    try {
+        const j = await apiGet('/api/config/raw');
+        if (j.ok) document.getElementById('raw-editor').value = j.data;
+    } catch(e) { showToast('加载失败', 'error'); }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Utils
+// ══════════════════════════════════════════════════════════════
+function escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function refreshAll() {
+    loadConfig();
+    updateDashboard();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Image Compressor
+// ══════════════════════════════════════════════════════════════
+
+let compStatusInterval = null;
+
+async function renderCompressor() {
+    await loadCompressorStatus();
+    await loadCompressorConfig();
+    // 每 5 秒刷新状态（如果正在运行）
+    if (compStatusInterval) clearInterval(compStatusInterval);
+    compStatusInterval = setInterval(async () => {
+        const statusDiv = document.getElementById('comp-running');
+        if (statusDiv && statusDiv.textContent.includes('运行中')) {
+            await loadCompressorStatus();
+        }
+    }, 5000);
+}
+
+async function loadCompressorStatus() {
+    try {
+        const j = await apiGet('/api/compressor/status');
+        if (!j.ok) return;
+        const d = j.data;
+
+        document.getElementById('comp-running').innerHTML = d.running
+            ? '<span class="badge badge-green">运行中...</span>'
+            : '<span class="badge badge-gray">就绪</span>';
+
+        document.getElementById('comp-last-run').textContent = d.last_run_end
+            ? new Date(d.last_run_end).toLocaleString('zh-CN')
+            : '—';
+
+        document.getElementById('comp-duration').textContent = d.last_run_duration
+            ? d.last_run_duration + ' 秒'
+            : '—';
+
+        document.getElementById('comp-saved').textContent = d.total_saved_mb
+            ? d.total_saved_mb + ' MB'
+            : '0 MB';
+
+        document.getElementById('comp-scanned').textContent = d.total_scanned;
+        document.getElementById('comp-compressed').textContent = d.total_compressed;
+        document.getElementById('comp-skipped').textContent = d.total_skipped;
+        document.getElementById('comp-errors').textContent = d.total_errors;
+
+        // 最近记录
+        const resultsEl = document.getElementById('comp-results');
+        if (d.last_results && d.last_results.length > 0) {
+            resultsEl.innerHTML = d.last_results.map(r =>
+                `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border-color);font-size:11px;">
+                    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(r.path.split('/').pop() || r.path)}</span>
+                    <span style="width:70px;text-align:right;color:var(--text-muted);">${(r.original_size/1024).toFixed(0)}KB</span>
+                    <span style="width:50px;text-align:center;color:var(--xbox-green-bright);">→</span>
+                    <span style="width:70px;text-align:left;">${(r.final_size/1024).toFixed(0)}KB</span>
+                    <span style="width:60px;text-align:right;color:var(--xbox-green);">-${(r.saved_kb).toFixed(0)}KB</span>
+                    <span style="width:80px;text-align:right;font-size:10px;color:var(--text-muted);">${r.method}</span>
+                </div>`
+            ).join('');
+        } else {
+            resultsEl.innerHTML = '<span style="color:var(--text-muted)">暂无记录</span>';
+        }
+
+        // 历史
+        const histEl = document.getElementById('comp-history');
+        if (d.history && d.history.length > 0) {
+            const items = [...d.history].reverse().slice(0, 20);
+            histEl.innerHTML = items.map(h => {
+                const saved = h.saved_bytes ? (h.saved_bytes / (1024*1024)).toFixed(1) + 'MB' : '—';
+                const time = h.end ? new Date(h.end).toLocaleString('zh-CN') : '?';
+                return `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border-color);font-size:11px;">
+                    <span style="color:var(--text-muted);">${escHtml(time)}</span>
+                    <span>${escHtml(h.summary || '—')}</span>
+                    <span style="color:${h.ok ? 'var(--xbox-green)' : 'var(--danger)'};">${h.ok ? '✓' : '⚠'}</span>
+                </div>`;
+            }).join('');
+        } else {
+            histEl.innerHTML = '<span style="color:var(--text-muted)">暂无历史</span>';
+        }
+    } catch(e) {
+        console.error('加载压缩状态失败', e);
+    }
+}
+
+async function loadCompressorConfig() {
+    try {
+        const j = await apiGet('/api/compressor/config');
+        if (!j.ok) return;
+        const d = j.data;
+
+        document.getElementById('comp-enabled').checked = d.enabled;
+        if (d.scan_dirs && d.scan_dirs.length > 0) {
+            document.getElementById('comp-scan-dirs').value = d.scan_dirs.join('\n');
+        }
+        document.getElementById('comp-max-size').value = d.max_size_kb;
+        document.getElementById('comp-interval').value = d.interval_minutes;
+        document.getElementById('comp-interval-display').textContent = d.interval_minutes;
+        // 调度器实际状态
+        if (d.scheduler) {
+            document.getElementById('comp-running').innerHTML = d.scheduler.enabled
+                ? '<span class="badge badge-green">定时运行中</span>'
+                : '<span class="badge badge-gray">已暂停</span>';
+        }
+    } catch(e) {
+        console.error('加载压缩配置失败', e);
+    }
+}
+
+async function saveCompressorConfig() {
+    const dirs = document.getElementById('comp-scan-dirs').value
+        .split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    const maxSize = parseInt(document.getElementById('comp-max-size').value) || 500;
+    const interval = parseInt(document.getElementById('comp-interval').value) || 30;
+    const enabled = document.getElementById('comp-enabled').checked;
+
+    try {
+        const j = await apiPost('/api/compressor/config', {
+            enabled,
+            scan_dirs: dirs,
+            max_size_kb: maxSize,
+            interval_minutes: interval,
+        });
+        showToast(j.message || (j.ok ? '保存成功' : '保存失败'), j.ok ? 'success' : 'error');
+        if (j.ok) {
+            document.getElementById('comp-interval-display').textContent = interval;
+            await loadCompressorStatus();
+        }
+    } catch(e) {
+        showToast('保存失败: ' + e.message, 'error');
+    }
+}
+
+async function runCompressorNow() {
+    try {
+        const j = await apiPost('/api/compressor/run', {});
+        showToast(j.message || '已启动', j.ok ? 'success' : 'error');
+        if (j.ok) {
+            // 立即刷新状态
+            setTimeout(loadCompressorStatus, 1000);
+        }
+    } catch(e) {
+        showToast('启动失败: ' + e.message, 'error');
+    }
+}
+
+async function renameFiles() {
+    if (!confirm('确定要一键重命名扫描目录中的图片吗？\n\n文件将按修改时间重命名为 年月日_时分秒_序号 格式。\n此操作不可撤销！')) return;
+
+    const btn = event.target;
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ 重命名中...';
+
+    try {
+        const j = await apiPost('/api/compressor/rename', {});
+        if (!j.ok) {
+            showToast('重命名失败: ' + (j.error || '未知错误'), 'error');
+            return;
+        }
+        const d = j.data;
+        const parts = [`重命名完成：${d.renamed} 个成功`];
+        if (d.skipped > 0) parts.push(`${d.skipped} 个跳过（已命名）`);
+        if (d.errors.length > 0) parts.push(`${d.errors.length} 个失败`);
+        showToast(parts.join('，') + (j.message ? ' — ' + j.message : ''), d.errors.length > 0 ? 'warning' : 'success');
+
+        // 如果重命名了文件，刷新状态
+        if (d.renamed > 0) {
+            await loadCompressorStatus();
+        }
+    } catch(e) {
+        showToast('重命名失败: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Image Dedup
+// ══════════════════════════════════════════════════════════════
+let dedupPollInterval = null;
+let _dupAllGroups = [];         // 完整重复组数据
+let _dupPage = 0;               // 当前页码
+const _dupPageSize = 10;        // 每页10组
+let _dupStuckTimer = null;      // 扫描卡住检测定时器
+let _dupLastProgressTs = 0;     // 上次进度更新时间戳
+
+// ══════════════════════════════════════════════════════════════
+//  状态加载
+// ══════════════════════════════════════════════════════════════
+
+function resetDedupButton() {
+    const btn = document.getElementById('dedup-scan-btn');
+    if (btn) {
+        btn.disabled = false;
+        btn.textContent = '🔍 全量扫描去重';
+    }
+}
+
+async function loadDedupStatus() {
+    try {
+        const j = await apiGet('/api/dedup/status');
+        if (!j.ok) { resetDedupButton(); return; }
+        const d = j.data;
+        document.getElementById('dedup-records').textContent = (d.total_records || 0).toLocaleString();
+        document.getElementById('dedup-unique-hashes').textContent = (d.unique_hashes || 0).toLocaleString();
+        document.getElementById('dedup-db-path').textContent = d.db_path || '—';
+
+        const scan = d.scan || {};
+        const audit = d.audit || {};
+        const badge = document.getElementById('dedup-status-badge');
+        const progressDiv = document.getElementById('dedup-scan-progress');
+
+        // ── 扫描中 ──
+        if (scan.running) {
+            badge.innerHTML = '<span class="badge badge-blue">扫描中</span>';
+            progressDiv.style.display = 'block';
+            const prog = scan.progress || {};
+            const pct = prog.total > 0 ? Math.round(prog.current / prog.total * 100) : 0;
+            const phase = prog.phase === 'cluster' ? '聚类' : '计算';
+            document.getElementById('dedup-progress-text').textContent = `${phase} ${prog.current}/${prog.total}`;
+            document.getElementById('dedup-progress-pct').textContent = pct + '%';
+            document.getElementById('dedup-progress-fill').style.width = pct + '%';
+            document.getElementById('dedup-current-file').textContent = prog.file ? prog.file.substring(prog.file.lastIndexOf('\\') + 1) : '';
+            document.getElementById('dedup-scan-btn').disabled = true;
+
+            // 卡住检测：30 秒进度未更新 → 提示
+            const now = Date.now();
+            if (_dupLastProgressTs === 0) _dupLastProgressTs = now;
+            if (prog.current > 0) _dupLastProgressTs = now;  // 有进度就重置
+            const stuck = (now - _dupLastProgressTs > 30000);
+            document.getElementById('dedup-current-file').textContent += stuck ? ' ⚠️ 扫描似乎卡住了，请稍候...' : '';
+            return;
+        }
+        _dupLastProgressTs = 0;  // 扫描结束，重置
+
+        // ── 就绪 ──
+        badge.innerHTML = '<span class="badge badge-gray">就绪</span>';
+        resetDedupButton();
+        progressDiv.style.display = 'none';
+
+        // ── 扫描结果 ──
+        const resultSection = document.getElementById('dedup-scan-result-section');
+        const auditSection = document.getElementById('dedup-audit-section');
+        const statsDiv = document.getElementById('dedup-scan-stats');
+
+        if (scan.end_time && scan.stats && scan.stats.scanned > 0) {
+            resultSection.style.display = 'block';
+            document.getElementById('dedup-scan-time').textContent = `扫描时间: ${scan.start_time || ''}`;
+
+            const st = scan.stats;
+            let html = `<div style="display:flex;gap:16px;flex-wrap:wrap;">
+                <span>📁 扫描: <b>${st.scanned}</b></span>
+                <span>🆕 新增到库: <b style="color:var(--xbox-green-bright)">${st.new || 0}</b></span>
+                <span>🔁 重复组: <b>${st.groups || 0}</b></span>
+                <span>📄 重复文件: <b>${st.duplicate_files || 0}</b></span>
+                <span>🗜️ 已压缩: <b>${st.compressed || 0}</b></span>
+                <span>⚠️ 错误: <b style="color:var(--danger)">${st.errors || 0}</b></span>
+            </div>`;
+
+            if (st.groups > 0 && !audit.applied) {
+                html += `<div style="margin-top:8px;">
+                    <span style="color:var(--xbox-green-bright);font-weight:600;">⚠️ 发现 ${st.groups} 组重复图片（共 ${st.duplicate_files} 张），请审核后处理</span>
+                </div>`;
+            } else if (st.groups > 0 && audit.applied) {
+                html += `<div style="margin-top:8px;">
+                    <span style="color:var(--text-muted);">✅ 已处理</span>
+                </div>`;
+            } else if (st.groups === 0 && st.scanned > 0) {
+                html += `<div style="margin-top:8px;">
+                    <span style="color:var(--xbox-green-bright);">✅ 未发现重复图片</span>
+                </div>`;
+            }
+
+            statsDiv.innerHTML = html;
+
+            // 有重复且未处理 → 显示审核区
+            if (st.groups > 0 && !audit.applied) {
+                auditSection.style.display = 'block';
+                await loadDuplicateGroups();
+            } else {
+                auditSection.style.display = 'none';
+            }
+        } else {
+            resultSection.style.display = 'none';
+        }
+    } catch(e) {
+        console.error('加载去重状态失败', e);
+        resetDedupButton();
+    }
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  全量扫描
+// ══════════════════════════════════════════════════════════════
+
+async function startDedupScan() {
+    const btn = document.getElementById('dedup-scan-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ 启动中...';
+    try {
+        const j = await apiPost('/api/dedup/scan', {});
+        if (j.ok) {
+            showToast(j.message, 'success');
+            // 隐藏上次结果
+            document.getElementById('dedup-scan-result-section').style.display = 'none';
+            document.getElementById('dedup-audit-section').style.display = 'none';
+            loadDedupStatus();
+            if (!dedupPollInterval) {
+                dedupPollInterval = setInterval(loadDedupStatus, 2000);
+            }
+        } else {
+            showToast(j.error || '启动失败', 'error');
+            btn.disabled = false;
+            btn.textContent = '🔍 全量扫描去重';
+        }
+    } catch(e) {
+        showToast('扫描启动失败: ' + e.message, 'error');
+        btn.disabled = false;
+        btn.textContent = '🔍 全量扫描去重';
+    }
+}
+
+async function runDedupPrune() {
+    if (!confirm('确定要清理所有失效记录吗？（文件已被手动删除的图片记录将被移除）')) return;
+    const btn = document.getElementById('dedup-prune-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ 清理中...';
+    try {
+        const j = await apiPost('/api/dedup/prune', {});
+        if (j.ok) {
+            showToast(j.message, 'success');
+            await loadDedupStatus();
+        } else {
+            showToast(j.error || '清理失败', 'error');
+        }
+    } catch(e) {
+        showToast('清理失败: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🗑️ 清理失效记录';
+    }
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  重复组审核
+// ══════════════════════════════════════════════════════════════
+
+async function loadDuplicateGroups() {
+    try {
+        const j = await apiGet('/api/dedup/duplicates');
+        if (!j.ok || !j.data) return;
+        const data = j.data;
+        _dupAllGroups = data.groups || [];
+        _dupPage = 0;
+        renderDupPage();
+    } catch(e) {
+        console.error('加载重复组失败', e);
+    }
+}
+
+function renderDupPage() {
+    const groups = _dupAllGroups;
+    const start = _dupPage * _dupPageSize;
+    const pageGroups = groups.slice(start, start + _dupPageSize);
+    const totalSel = groups.reduce((s, g) => s + g.files.filter(f => !f.keep).length, 0);
+    const totalPages = Math.max(1, Math.ceil(groups.length / _dupPageSize));
+
+    if (groups.length === 0) {
+        document.getElementById('dedup-audit-section').style.display = 'none';
+        return;
+    }
+    document.getElementById('dedup-audit-section').style.display = 'block';
+
+    document.getElementById('dedup-audit-summary').textContent =
+        `${groups.length} 组 · ${totalSel} 张默认删除（第 ${_dupPage + 1}/${totalPages} 页）`;
+
+    // 分页按钮
+    document.getElementById('dup-prev-btn').disabled = _dupPage <= 0;
+    document.getElementById('dup-next-btn').disabled = _dupPage >= totalPages - 1;
+    document.getElementById('dup-page-info').textContent = `第 ${_dupPage + 1}/${totalPages} 页 · 每组首张为旧图（保留）`;
+
+    const container = document.getElementById('dedup-groups-container');
+    container.innerHTML = '';
+
+    for (let pi = 0; pi < pageGroups.length; pi++) {
+        const gi = start + pi;  // global index
+        const g = pageGroups[pi];
+        const filesHtml = g.files.map((f, fi) => {
+            const dirShort = f.dir ? f.dir.replace(/^.*[\\/]转发图片[\\/]?/, '') : '';
+            const sizeStr = f.size > 1024 * 1024
+                ? (f.size / 1024 / 1024).toFixed(1) + ' MB'
+                : (f.size / 1024).toFixed(0) + ' KB';
+            const isFirst = fi === 0;
+            const checked = isFirst ? '' : 'checked';
+            const badgeStyle = isFirst ? 'badge-green' : 'badge-gray';
+            const badgeText = isFirst ? '保留' : '待删';
+            const thumbUrl = '/api/dedup/preview?path=' + encodeURIComponent(f.path);
+            return `<div class="dup-file-row" data-gi="${gi}" data-fi="${fi}">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 10px;border-radius:4px;background:${isFirst ? 'rgba(16,124,16,0.08)' : 'transparent'};border:1px solid ${isFirst ? 'rgba(16,124,16,0.2)' : 'var(--border-color)'};">
+                    <input type="checkbox" class="dup-file-cb" data-gi="${gi}" data-fi="${fi}" ${checked} style="width:16px;height:16px;accent-color:var(--danger);flex-shrink:0;">
+                    <span class="badge ${badgeStyle}" style="min-width:36px;text-align:center;flex-shrink:0;">${badgeText}</span>
+                    <img src="${thumbUrl}" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:4px;flex-shrink:0;background:var(--bg-input);" loading="lazy" onerror="this.style.display='none'">
+                    <div style="flex:1;min-width:0;">
+                        <div style="font-size:12px;word-break:break-all;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                            ${dirShort ? '<span style="color:var(--text-muted)">' + dirShort + '/</span>' : ''}${f.fname || f.path.split('\\').pop() || f.path.split('/').pop()}
+                        </div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+                            ${sizeStr} · ${f.mtime || ''}
+                        </div>
+                    </div>
+                    <span onclick="event.stopPropagation();openPreviewModal('${thumbUrl}')" title="查看原图" style="font-size:14px;cursor:pointer;flex-shrink:0;padding:2px 4px;border-radius:4px;background:rgba(16,124,16,0.15);" onmouseover="this.style.background='rgba(16,124,16,0.3)'" onmouseout="this.style.background='rgba(16,124,16,0.15)'">🔍</span>
+                </label>
+            </div>`;
+        }).join('');
+
+        const totalSize = g.files.reduce((s, f) => s + (f.size || 0), 0);
+        const sizeStr = totalSize > 1024 * 1024
+            ? (totalSize / 1024 / 1024).toFixed(1) + ' MB'
+            : (totalSize / 1024).toFixed(0) + ' KB';
+
+        container.innerHTML += `<div class="card dup-group-card" style="margin-top:12px;padding:12px 16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <span style="font-weight:600;font-size:13px;">
+                    组 #${gi + 1} <span style="color:var(--text-muted);font-weight:400;">— ${g.count} 张 · ${sizeStr}</span>
+                </span>
+                <span style="font-size:11px;color:var(--text-muted);">hash: ${(g.hash || '').substring(0, 12)}...</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+                ${filesHtml}
+            </div>
+        </div>`;
+    }
+
+    document.querySelectorAll('.dup-file-cb').forEach(cb => {
+        cb.addEventListener('change', updateDeleteSummary);
+    });
+    updateDeleteSummary();
+}
+
+function prevDupPage() {
+    if (_dupPage > 0) { _dupPage--; renderDupPage(); }
+}
+function nextDupPage() {
+    const totalPages = Math.ceil(_dupAllGroups.length / _dupPageSize);
+    if (_dupPage < totalPages - 1) { _dupPage++; renderDupPage(); }
+}
+
+function updateDeleteSummary() {
+    const cbs = document.querySelectorAll('.dup-file-cb:checked');
+    const total = _dupAllGroups.reduce((s, g) => s + g.files.length, 0);
+    const totalPages = Math.max(1, Math.ceil(_dupAllGroups.length / _dupPageSize));
+    document.getElementById('dedup-audit-summary').textContent =
+        `${_dupAllGroups.length} 组 · ${total} 张 · 已选 ${cbs.length} 张待删除（第 ${_dupPage + 1}/${totalPages} 页）`;
+}
+
+async function quickDedupAll() {
+    const totalDel = _dupAllGroups.reduce((s, g) => s + (g.files.length - 1), 0);
+    if (totalDel === 0) {
+        showToast('没有需要删除的重复图片', 'info');
+        return;
+    }
+    if (!confirm(`一键去重将删除 ${totalDel} 张重复图片（每组保留最旧的一张），是否继续？\n\n⚠️ 此操作不可撤销！`)) {
+        return;
+    }
+
+    const btn = document.getElementById('dedup-quick-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ 执行中...';
+
+    try {
+        // 构建默认选择：每组第一张保留，其余删除
+        const selection = _dupAllGroups.map(g => ({
+            files: g.files.map((f, fi) => ({
+                path: f.path,
+                delete: fi > 0  // 第一张保留，其余删除
+            }))
+        }));
+
+        const j = await apiPost('/api/dedup/duplicates', { groups: selection });
+        if (j.ok) {
+            showToast(j.message, 'success');
+            await loadDedupStatus();
+            document.getElementById('dedup-audit-section').style.display = 'none';
+        } else {
+            showToast(j.error || '处理失败', 'error');
+        }
+    } catch(e) {
+        showToast('一键去重失败: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '⚡ 一键去重';
+    }
+}
+
+async function confirmDeleteDuplicates() {
+    const checked = document.querySelectorAll('.dup-file-cb:checked');
+    if (checked.length === 0) {
+        showToast('请至少选择一张要删除的图片', 'warning');
+        return;
+    }
+
+    const total = checked.length;
+    if (!confirm(`确定删除选中的 ${total} 张图片吗？\n\n⚠️ 此操作不可撤销！\n保留的图片将被记录到去重库，以后再存相同图片时会自动跳过。`)) {
+        return;
+    }
+
+    const btn = document.getElementById('dedup-delete-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ 处理中...';
+
+    try {
+        // 重新获取完整数据（最可靠），用 checkbox 状态覆盖 delete 标记
+        const resp = await apiGet('/api/dedup/duplicates');
+        if (!resp.ok || !resp.data) throw new Error('无法获取重复组数据');
+        const groups = resp.data.groups || [];
+
+        document.querySelectorAll('.dup-file-cb').forEach(cb => {
+            const gi = parseInt(cb.dataset.gi);
+            const fi = parseInt(cb.dataset.fi);
+            if (groups[gi] && groups[gi].files[fi]) {
+                groups[gi].files[fi].delete = cb.checked;
+            }
+        });
+
+        const j = await apiPost('/api/dedup/duplicates', {groups});
+        if (j.ok) {
+            showToast(j.message, 'success');
+            await loadDedupStatus();
+            document.getElementById('dedup-audit-section').style.display = 'none';
+        } else {
+            showToast(j.error || '处理失败', 'error');
+        }
+    } catch(e) {
+        showToast('处理失败: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🗑️ 确认删除选中文件';
+    }
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  页面切换管理
+// ══════════════════════════════════════════════════════════════
+
+document.querySelectorAll('.sidebar nav a').forEach(a => {
+    a.addEventListener('click', () => {
+        if (dedupPollInterval && a.dataset.page !== 'dedup') {
+            clearInterval(dedupPollInterval);
+            dedupPollInterval = null;
+        }
+        if (compStatusInterval && a.dataset.page !== 'compressor') {
+            clearInterval(compStatusInterval);
+            compStatusInterval = null;
+        }
+    });
+});
+
+
+// ══════════════════════════════════════════════════════════════
+//  图片预览弹窗
+// ══════════════════════════════════════════════════════════════
+
+function openPreviewModal(url) {
+    const modal = document.getElementById('preview-modal');
+    document.getElementById('preview-modal-img').src = url;
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function closePreviewModal() {
+    const modal = document.getElementById('preview-modal');
+    modal.style.display = 'none';
+    document.getElementById('preview-modal-img').src = '';
+    document.body.style.overflow = '';
+}
+
+// ESC 键关闭弹窗
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closePreviewModal();
+    }
+});
+
+
+// ══════════════════════════════════════════════════════════════
+//  Init
+// ══════════════════════════════════════════════════════════════
+loadConfig();
+updateDashboard();
+setInterval(updateDashboard, 30000);
+</script>
+</body>
+</html>
