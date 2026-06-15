@@ -62,3 +62,8 @@ siliconflow:
   chat_model: Qwen/Qwen2.5-14B-Instruct
 trigger_keywords:
 - 泡泡
+
+# 插件系统配置
+mod:
+  enabled: true
+  auto_reload: true

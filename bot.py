@@ -40,6 +40,9 @@ from image_utils import ImageServer, compress_image
 from image_dedup import ImageDeduplicator
 from gen_img import gen_image, _log_gen_img, _get_gen_img_key
 
+# 插件系统
+from mod import PluginManager, EventBus, MessageEvent, ParsedMessageEvent, IntentEvent
+
 log = logging.getLogger("gw")
 
 
@@ -78,6 +81,10 @@ class Bot:
         # 图片去重器（基于 phash，全局去重 ~/Desktop/转发图片/）
         self.dedup = ImageDeduplicator()
 
+        # 插件系统
+        self.plugin_manager = PluginManager(self)
+        self._bus = EventBus()
+
         # 配置文件缓存（支持热加载）
         self._group_configs = GROUP_PROMPTS
         self._auto_clear_groups = AUTO_CLEAR_GROUPS
@@ -114,6 +121,11 @@ class Bot:
         await self.img.ensure_running()
         self._send_worker_task = asyncio.create_task(self._send_worker())
         self._start_se_tu_schedulers()
+
+        # 加载插件
+        plugin_count = await self.plugin_manager.load_all()
+        await self._bus.emit("bot_start", {"plugin_count": plugin_count})
+        log.info("PLUGIN_SYSTEM: loaded %d plugin(s)", plugin_count)
         while not self._shutdown:
             try:
                 await self.connect()
@@ -484,6 +496,17 @@ class Bot:
         if uid == str(self.self_id):
             return
 
+        # ── 插件事件：原始消息到达 ──────────────────────
+        msg_event = MessageEvent(
+            group_id=gid, user_id=uid,
+            raw_data=data, raw_message=data.get("raw_message", ""),
+            message=msg,
+        )
+        result = await self._bus.emit("message", msg_event, cancellable=True)
+        if result.consumed:
+            log.info("PLUGIN_CONSUMED: gid=%s uid=%s msg=message", gid, uid)
+            return
+
         # 管理员 /add 命令：不受白名单限制
         raw_text = ""
         for s in msg:
@@ -606,6 +629,16 @@ class Bot:
         text = text.strip()
         log.info("PARSE_RESULT: reply=%s at_bot=%s text_len=%d text_start=%s",
                  reply, at_bot, len(text), text[:80] if text else "(empty)")
+
+        # ── 插件事件：消息解析完成 ──────────────────────
+        parsed_event = ParsedMessageEvent(
+            group_id=gid, user_id=uid, text=text,
+            img_urls=img_urls, at_bot=at_bot, reply_to=rid,
+        )
+        pr = await self._bus.emit("message_parsed", parsed_event, cancellable=True)
+        if pr.consumed:
+            log.info("PLUGIN_CONSUMED: gid=%s uid=%s msg=message_parsed", gid, uid)
+            return
 
         # 涩图直发
         stripped = text.strip()
@@ -864,6 +897,20 @@ class Bot:
         intent = route["intent"]
         log.info("ROUTE: gid=%s intent=%s conf=%s params=%s",
                  gid, intent, route.get("confidence"), route.get("params"))
+
+        # ── 插件事件：意图路由完成 ──────────────────────
+        intent_event = IntentEvent(
+            group_id=gid, user_id=uid, text=text,
+            intent=intent, confidence=route.get("confidence", ""),
+            params=route.get("params", {}),
+        )
+        ir = await self._bus.emit("intent_resolved", intent_event, cancellable=True)
+        if ir.consumed:
+            log.info("PLUGIN_CONSUMED: gid=%s uid=%s msg=intent_resolved", gid, uid)
+            return
+        # 插件可能修改了意图
+        intent = intent_event.intent
+        route["params"] = intent_event.params
 
         try:
             if intent == "send_img":
@@ -1979,6 +2026,9 @@ class Bot:
 
     async def close(self):
         self._shutdown = True
+        # 关闭插件
+        await self._bus.emit("bot_shutdown", {})
+        await self.plugin_manager.unload_all()
         if self._send_worker_task:
             self._send_worker_task.cancel()
         if self._ws and not self._ws.closed:

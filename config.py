@@ -61,3 +61,8 @@ GEN_IMG_LOG = os.path.join(os.path.expanduser("~"), "Desktop", "AI生成", "gen_
 # ── 选图模式 ──
 PICK_MODE = cfg.get("pick_mode", "random")  # random(顺序窗) / newest(最新优先) / shuffle(纯随机)
 PICK_SKIP = cfg.get("pick_skip", 0)         # 跳跃步数（仅 newest 模式）
+
+# ── 插件系统 ──
+MOD_ENABLED = cfg.get("mod", {}).get("enabled", True)
+MOD_PLUGINS_DIR = os.path.join(BASE_DIR, "mod", "plugins")
+MOD_AUTO_RELOAD = cfg.get("mod", {}).get("auto_reload", True)

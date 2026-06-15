@@ -1,0 +1,6 @@
+name: hello_world
+display_name: Hello 示例插件
+author: GreyWind
+version: 1.0.0
+description: 最简单的示例插件，在群里发 "hello" 时会自动回复
+enabled: true
