@@ -101,6 +101,10 @@ def main():
     parser.add_argument("--reset", action="store_true", help="清空已发记录")
     parser.add_argument("--list-src", action="store_true", help="列出可用的子文件夹")
     parser.add_argument("--gif", action="store_true", help="只选 GIF 文件（默认排除 GIF）")
+    parser.add_argument("--mode", type=str, default="random", choices=["random", "newest", "shuffle"],
+                       help="选图模式: random(随机顺序窗) / newest(按时间最新优先) / shuffle(纯随机)")
+    parser.add_argument("--skip", type=int, default=0,
+                       help="跳跃步数，仅 newest 模式生效: 0=不跳连续取, 1=隔1张, 3=隔3张等")
 
     args = parser.parse_args()
     global _GIF_MODE
@@ -148,13 +152,29 @@ def main():
         state[state_key] = []
         available = get_available(all_images, state, state_key, use_relpath=not src_name)
 
-    # 顺序窗口选图：按文件名排序 → 随机起始位取连续 count 张
-    # 保证图片按时间顺序发送，不跳图不漏图（与 GIF 选图逻辑一致）
-    if len(available) <= count:
-        picks = available[:]
+    if not available:
+        print("无可用图片", file=sys.stderr)
+        sys.exit(0)
+
+    # 选图模式
+    if args.mode == "shuffle":
+        # 纯随机：从全部可用图片中随机抽 count 张
+        picks = random.sample(available, min(count, len(available)))
+    elif args.mode == "newest":
+        # 按修改时间最新优先
+        available.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        if args.skip > 0:
+            # 跳跃模式：从最新开始，每隔 skip 张取一张
+            picks = available[::args.skip + 1][:count]
+        else:
+            picks = available[:count]
     else:
-        start = random.randint(0, len(available) - count)
-        picks = available[start:start + count]
+        # random: 顺序窗口选图（按文件名排序 → 随机起始位取连续 count 张）
+        if len(available) <= count:
+            picks = available[:]
+        else:
+            start = random.randint(0, len(available) - count)
+            picks = available[start:start + count]
 
     state.setdefault(state_key, [])
     if src_name:

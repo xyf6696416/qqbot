@@ -15,6 +15,20 @@ Thumbs.db
 # Temp / cache files
 tc/1/
 tc/.pick_fwd_state.json
+.compressor_cache.json
+.daily_img_usage.json
+
+# Logs
+*.log
+bridge_test.log
+logs/
+
+# Runtime / config backups
+config.yaml.bak
+
+# Claude session files
+.claude/
+
 
 # NapCatQQ runtime (downloaded separately, may be in use)
 ncp/NapCat.44498.Shell/

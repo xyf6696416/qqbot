@@ -15,14 +15,48 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.yaml"
 RELOAD_FLAG = BASE_DIR / ".reload_config.flag"
 PORT = 7788
 
+# 日志（预览路由等会用到）
+import logging
+log = logging.getLogger("gw")
+
 app = Flask(__name__, template_folder=BASE_DIR / "templates")
+
+# ── 图片去重 ──
+from image_dedup import ImageDeduplicator
+
+# 去重器实例（延迟初始化）
+_dedup: ImageDeduplicator | None = None
+_dedup_lock = threading.Lock()
+
+# 扫描状态
+_scan_state = {
+    "running": False,
+    "progress": {"current": 0, "total": 0, "file": "", "phase": ""},
+    "stats": {},
+    "start_time": None,
+    "end_time": None,
+}
+
+# 审计模式重复组（扫描结果，待用户审核）
+_dup_groups: list[dict] = []
+_dup_groups_lock = threading.Lock()
+_dup_applied = False  # 标记本次扫描结果是否已处理
+
+
+def _get_dedup() -> ImageDeduplicator:
+    global _dedup
+    with _dedup_lock:
+        if _dedup is None:
+            _dedup = ImageDeduplicator()
+        return _dedup
+
 
 # ── 图片压缩调度器 ──
 from image_compressor import status as comp_status, scan_and_compress, start_scheduler, scheduler as comp_scheduler
@@ -463,6 +497,209 @@ def api_daily_img_usage():
     except Exception:
         pass
     return jsonify({"ok": True, "data": usage})
+
+
+# ── 图片去重 API ────────────────────────────────────────
+
+
+@app.route("/api/dedup/status", methods=["GET"])
+def api_dedup_status():
+    """获取去重器状态、扫描进度、待审核重复组信息"""
+    global _scan_state, _dup_groups, _dup_applied
+    dedup = _get_dedup()
+    with _dup_groups_lock:
+        dup_count = len(_dup_groups)
+        dup_files = sum(g["count"] for g in _dup_groups)
+    return jsonify({
+        "ok": True,
+        "data": {
+            **dedup.get_status(),
+            "scan": {
+                "running": _scan_state["running"],
+                "progress": _scan_state["progress"],
+                "stats": _scan_state.get("stats", {}),
+                "start_time": _scan_state.get("start_time"),
+                "end_time": _scan_state.get("end_time"),
+            },
+            "audit": {
+                "has_groups": dup_count > 0,
+                "group_count": dup_count,
+                "duplicate_files": dup_files,
+                "applied": _dup_applied,
+            },
+        },
+    })
+
+
+@app.route("/api/dedup/scan", methods=["POST"])
+def api_dedup_scan():
+    """
+    启动全量扫描去重（审计模式）。
+    扫描结果存入 _dup_groups，不自动删除，等待用户审核。
+    """
+    global _scan_state, _dup_groups, _dup_applied
+    if _scan_state["running"]:
+        return jsonify({"ok": False, "error": "扫描正在进行中，请等待完成"})
+
+    base_dir = os.path.join(os.path.expanduser("~"), "Desktop", "转发图片")
+    if not os.path.isdir(base_dir):
+        return jsonify({"ok": False, "error": f"目录不存在: {base_dir}"})
+
+    def _do_scan():
+        global _scan_state, _dup_groups, _dup_applied
+        _scan_state = {
+            "running": True,
+            "progress": {"current": 0, "total": 0, "file": "", "phase": ""},
+            "stats": {},
+            "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "end_time": None,
+        }
+        _dup_applied = False
+        try:
+            dedup = _get_dedup()
+
+            def _progress(cur, total, fpath, phase=""):
+                _scan_state["progress"] = {"current": cur, "total": total, "file": fpath, "phase": phase}
+
+            result = dedup.find_duplicates(base_dir, progress_callback=_progress)
+            _scan_state["stats"] = {**result["stats"], "mode": "audit"}
+
+            # 写入内存供审核页面读取
+            with _dup_groups_lock:
+                _dup_groups = result["groups"]
+
+        except Exception as e:
+            _scan_state["stats"] = {"error": str(e)}
+            log.error("DEDUP_SCAN_ERR: %s", str(e)[:200])
+        finally:
+            _scan_state["running"] = False
+            _scan_state["end_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            _scan_state["progress"] = {"current": 0, "total": 0, "file": "", "phase": ""}
+
+    t = threading.Thread(target=_do_scan, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "message": "全量扫描已启动，完成后请在「重复文件」中审核"})
+
+
+@app.route("/api/dedup/duplicates", methods=["GET"])
+def api_dedup_get_duplicates():
+    """获取待审核的重复组列表"""
+    global _dup_groups, _dup_applied
+    with _dup_groups_lock:
+        return jsonify({
+            "ok": True,
+            "data": {
+                "groups": _dup_groups,
+                "count": len(_dup_groups),
+                "applied": _dup_applied,
+            },
+        })
+
+
+@app.route("/api/dedup/duplicates", methods=["POST"])
+def api_dedup_apply_duplicates():
+    """
+    提交审核结果：
+    删除用户勾选的文件，保留的文件记录到去重库。
+    body: { "groups": [ { "files": [{"path": "...", "delete": true}, ...] }, ... ] }
+    """
+    global _dup_groups, _dup_applied
+    if _dup_applied:
+        return jsonify({"ok": False, "error": "本次扫描的结果已经处理过了，请重新扫描"})
+
+    body = request.get_json(force=True)
+    selection = body.get("groups", [])
+    if not selection:
+        return jsonify({"ok": False, "error": "没有提交审核结果"})
+
+    # 1. 执行删除
+    del_result = ImageDeduplicator.apply_deletion(selection)
+
+    # 2. 保留的文件写入去重库
+    dedup = _get_dedup()
+    rec_result = ImageDeduplicator.record_remaining(selection, dedup)
+
+    # 3. 清理数据库失效记录
+    prune_result = dedup.prune()
+
+    _dup_applied = True
+
+    return jsonify({
+        "ok": True,
+        "data": {
+            "deleted": del_result["deleted"],
+            "delete_failed": del_result["failed"],
+            "recorded": rec_result["recorded"],
+            "prune_removed": prune_result["removed"],
+            "remaining_records": prune_result["remaining"],
+        },
+        "message": (
+            f"已删除 {del_result['deleted']} 张重复图片"
+            + (f"，{del_result['failed']} 张删除失败" if del_result["failed"] else "")
+            + f"，去重库已记录 {rec_result['recorded']} 张保留图片 ✅"
+        ),
+    })
+
+
+@app.route("/api/dedup/prune", methods=["POST"])
+def api_dedup_prune():
+    """清理失效记录（文件已被删除的脏数据）"""
+    dedup = _get_dedup()
+    result = dedup.prune()
+    return jsonify({
+        "ok": True,
+        "data": result,
+        "message": f"已清理 {result['removed']} 条失效记录，剩余 {result['remaining']} 条",
+    })
+
+
+# ── 图片预览 ────────────────────────────────────────────
+
+_FWD_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "转发图片")
+
+
+@app.route("/api/dedup/preview")
+def api_dedup_preview():
+    """返回重复图片的缩略图（最大 300px），用于审核预览。"""
+    path = request.args.get("path", "")
+    if not path:
+        return "", 400
+
+    # 安全校验：只允许访问 ~/Desktop/转发图片/ 下文件
+    try:
+        real_path = os.path.realpath(path)
+        real_base = os.path.realpath(_FWD_DIR)
+        if not real_path.startswith(real_base + os.sep) and real_path != real_base:
+            return "", 403
+        if not os.path.isfile(real_path):
+            return "", 404
+    except Exception:
+        return "", 400
+
+    try:
+        from PIL import Image
+        import io
+
+        img = Image.open(real_path)
+        img.thumbnail((300, 300), Image.LANCZOS)
+
+        # 统一转 JPEG 输出
+        if img.mode in ("RGBA", "LA", "P"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "P":
+                img = img.convert("RGBA")
+            bg.paste(img, mask=img.split()[3] if img.mode == "RGBA" else None)
+            img = bg
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=75)
+        buf.seek(0)
+        return send_file(buf, mimetype="image/jpeg")
+    except Exception as e:
+        log.warning("PREVIEW_ERR: %s %s", os.path.basename(path), str(e)[:80])
+        return "", 500
 
 
 # ── 启动前初始化 ──────────────────────────────────────

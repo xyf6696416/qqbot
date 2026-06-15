@@ -53,7 +53,11 @@ MAX_IMAGE_SIZE = 500 * 1024  # 500KB
 # ── AI 生图 ──
 GEN_IMG_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "AI生成")
 GEN_IMG_API = "https://cdn.12ai.org/v1/images/generations"
-GEN_IMG_KEY = None  # 懒加载
+GEN_IMG_KEY = "sk-q654BxOLHiKEb6JhjEvQUCNyl3I9nhCU50RG3mghgUPX4wBD"
 GEN_IMG_DAILY_LIMIT = cfg.get("gen_img", {}).get("daily_limit", 99)
 GEN_IMG_URL_PREFIX = f"http://127.0.0.1:{IMG_PORT}/1/"
 GEN_IMG_LOG = os.path.join(os.path.expanduser("~"), "Desktop", "AI生成", "gen_img.log")
+
+# ── 选图模式 ──
+PICK_MODE = cfg.get("pick_mode", "random")  # random(顺序窗) / newest(最新优先) / shuffle(纯随机)
+PICK_SKIP = cfg.get("pick_skip", 0)         # 跳跃步数（仅 newest 模式）

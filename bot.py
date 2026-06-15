@@ -32,10 +32,12 @@ from config import (
     GROUP_PROMPTS, DEFAULT_PROMPT, AUTO_CLEAR_GROUPS, AUTO_SE_TU_GROUPS,
     SF_KEY, SF_MODEL, SF_CHAT_MODEL, IMG_PORT, IMG_URL, IMG_STORAGE,
     MAX_CONTEXT, MAX_IMAGE_SIZE, GEN_IMG_DIR, GEN_IMG_DAILY_LIMIT,
+    PICK_MODE, PICK_SKIP,
 )
 from intent_router import IntentRouter, RefContext
-from image_utils import ImageServer
-from image_compressor import scan_and_compress as _trigger_compress
+from image_utils import ImageServer, compress_image
+
+from image_dedup import ImageDeduplicator
 from gen_img import gen_image, _log_gen_img, _get_gen_img_key
 
 log = logging.getLogger("gw")
@@ -73,12 +75,17 @@ class Bot:
         self.send_queue = asyncio.Queue()
         self._send_worker_task = None
 
+        # 图片去重器（基于 phash，全局去重 ~/Desktop/转发图片/）
+        self.dedup = ImageDeduplicator()
+
         # 配置文件缓存（支持热加载）
         self._group_configs = GROUP_PROMPTS
         self._auto_clear_groups = AUTO_CLEAR_GROUPS
         self._trigger_kw = TRIGGER_KW
         self._admin_uids = ADMIN_UIDS
         self._forbidden_ops = FORBIDDEN_OPS
+        self._pick_mode = PICK_MODE
+        self._pick_skip = PICK_SKIP
 
         # 标记热加载配置可用（_reload_config 已定义）
         if not hasattr(self, '_reload_config'):
@@ -296,18 +303,23 @@ class Bot:
         img_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tc", "1")
         os.makedirs(img_dir, exist_ok=True)
         now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 复用 httpx 客户端（用于外部图片下载）
         for idx, url in enumerate(urls, 1):
             try:
-                import urllib.request
                 tmp = os.path.join(img_dir, f"tmp_{now}_{idx}")
                 if url.startswith("http"):
-                    urllib.request.urlretrieve(url, tmp)
+                    async with httpx.AsyncClient(timeout=30, verify=False) as hc:
+                        resp = await hc.get(url)
+                        if resp.status_code == 200:
+                            with open(tmp, "wb") as _f:
+                                _f.write(resp.content)
+                        else:
+                            log.warning("CACHE_IMG_HTTP_ERR: url=%s status=%d", url[:50], resp.status_code)
+                            continue
                 elif os.path.isfile(url):
-                    # 本地文件路径（如转发视频缓存），直接复制
                     import shutil
                     shutil.copy2(url, tmp)
                 else:
-                    # 本地路径但文件不存在 → 尝试 NapCat HTTP API 解析文件哈希
                     fname_only = os.path.basename(url)
                     resolved = False
                     try:
@@ -320,8 +332,12 @@ class Bot:
                                 data = resp.json().get("data", {})
                                 file_url = data.get("url") or data.get("file", "")
                                 if file_url and file_url.startswith("http"):
-                                    urllib.request.urlretrieve(file_url, tmp)
-                                    resolved = True
+                                    async with httpx.AsyncClient(timeout=30) as hc2:
+                                        r2 = await hc2.get(file_url)
+                                        if r2.status_code == 200:
+                                            with open(tmp, "wb") as _f:
+                                                _f.write(r2.content)
+                                            resolved = True
                                 elif file_url and os.path.isfile(file_url):
                                     shutil.copy2(file_url, tmp)
                                     resolved = True
@@ -350,6 +366,45 @@ class Bot:
                 if u:
                     urls.append(u)
         return urls
+
+    async def _extract_collection_imgs(self, collection_json):
+        """解析 QQ 收藏笔记，从 sharechain 页面提取所有图片 URL 并缓存"""
+        import re as _re
+        import httpx as _httpx
+
+        jump_url = collection_json.get("meta", {}).get("news", {}).get("jumpUrl", "")
+        if not jump_url:
+            log.warning("COLLECTION: no jumpUrl")
+            return []
+
+        log.info("COLLECTION: fetching %s", jump_url)
+        try:
+            async with _httpx.AsyncClient(timeout=15, verify=False) as cli:
+                resp = await cli.get(jump_url, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code != 200:
+                    log.warning("COLLECTION: HTTP %d", resp.status_code)
+                    return []
+                html = resp.text
+        except Exception as e:
+            log.warning("COLLECTION: fetch err %s", str(e)[:80])
+            return []
+
+        # 从 preview URL 提取 user_id（如 653020384），然后从 HTML 提取所有 collector 图片
+        preview = collection_json.get("meta", {}).get("news", {}).get("preview", "")
+        uid_match = _re.search(r'collector/(\d+)/', preview)
+        collector_uid = uid_match.group(1) if uid_match else "653020384"
+        img_urls = sorted(set(
+            f"https://shp.{m}" for m in _re.findall(
+                rf'qpic\.cn/collector/{collector_uid}/[a-f0-9-]+/', html)
+        ))
+        if not img_urls:
+            log.warning("COLLECTION: no images found in sharechain page")
+            return []
+
+        log.info("COLLECTION: found %d images from sharechain", len(img_urls))
+        cached = await self._cache_fwd_images(img_urls)
+        log.info("COLLECTION: cached %d images", len(cached))
+        return cached
 
     def _build_context(self, gid, current_text=""):
         ctx = self.context.get(str(gid), deque(maxlen=MAX_CONTEXT))
@@ -504,10 +559,20 @@ class Bot:
                     q_img_cached = await self._cache_fwd_images(q_imgs)
                     _all_cached_paths.extend(q_img_cached)
                 quoted_forward = None
+                quoted_collection = None  # QQ 收藏
                 for seg in q_msg:
-                    if seg.get("type") == "forward":
-                        quoted_forward = seg.get("data", {}).get("id", "")
+                    st = seg.get("type")
+                    sd = seg.get("data", {})
+                    if st == "forward":
+                        quoted_forward = sd.get("id", "")
                         break
+                    if st == "json":
+                        try:
+                            jd = json.loads(sd.get("data", "{}"))
+                            if jd.get("bizsrc") == "favorites.note":
+                                quoted_collection = jd
+                        except (json.JSONDecodeError, TypeError):
+                            pass
                 if quoted_forward:
                     log.info("QUOTED_FORWARD: id=%s", quoted_forward)
                     qf = await self.req("get_forward_msg", {"id": quoted_forward}, timeout=15)
@@ -526,6 +591,15 @@ class Bot:
                             )
                     else:
                         text = "[引用合并转发(展开失败)] " + text
+                elif quoted_collection:
+                    log.info("QUOTED_COLLECTION: jumpUrl=%s",
+                             quoted_collection.get("meta", {}).get("news", {}).get("jumpUrl", ""))
+                    coll_imgs = await self._extract_collection_imgs(quoted_collection)
+                    if coll_imgs:
+                        _all_cached_paths.extend(coll_imgs)
+                        text = f"[引用收藏]\n(收藏中包含{len(coll_imgs)}张图片，已缓存)\n[用户回复] {text}"
+                    else:
+                        text = "[引用收藏(展开失败)] " + text
                 else:
                     text = "[引用消息] " + text
 
@@ -542,6 +616,11 @@ class Bot:
         # 色图列表
         if not reply and stripped == "色图列表":
             log.info("SE_TU_LIST: gid=%s", gid)
+            reply = True
+
+        # 色图规则
+        if not reply and stripped in ("色图规则", "涩图规则"):
+            log.info("SE_TU_RULES: gid=%s", gid)
             reply = True
 
         # 直接喊文件夹名
@@ -687,6 +766,13 @@ class Bot:
         # /生图 不走 / 命令，直接走意图路由
         if text.startswith("/") and not re.search(r"/生图", text):
             await self._handle_cmd(gid, uid, text, at_bot)
+            return
+
+        # 色图规则
+        stripped = text.strip()
+        if stripped in ("色图规则", "涩图规则"):
+            log.info("SE_TU_RULES_PROCESS: gid=%s", gid)
+            await self._handle_rules(gid, uid)
             return
 
         # 涩图直发
@@ -872,7 +958,7 @@ class Bot:
         batch_script = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "tc", "send_images_batch.py")
 
-        cmd = [sys.executable, pick_script, "10"]
+        cmd = [sys.executable, pick_script, "10", "--mode", self._pick_mode, "--skip", str(self._pick_skip)]
         if src:
             cmd += ["--src", src]
         try:
@@ -888,6 +974,9 @@ class Bot:
             log.warning("SE_TU: no images")
             return
 
+        log.info("SE_TU_PICKED: gid=%s src=%s mode=%s skip=%d count=%d paths=[%s]",
+                 gid, src, self._pick_mode, self._pick_skip, len(paths),
+                 "|".join(os.path.basename(p) for p in paths[:6]))
         BATCH_SIZE = 6
         for i in range(0, len(paths), BATCH_SIZE):
             batch = paths[i:i + BATCH_SIZE]
@@ -926,134 +1015,163 @@ class Bot:
 
     async def _se_tu_send_gif(self, gid, uid, src):
         """
-        从 GIF/<src>/ 发 3 个 GIF（顺序窗口 + 防重复）。
-        选图方式：取所有未发送 GIF → 按文件名排序 → 随机起始位取连续 3 张。
+        从 GIF/<src>/ 发 3 个 GIF。
+        与 _se_tu_send 一致的流水线：pick_fwd_image.py 选图 → 复制到 tc/1/ → 一次 WS 批量发送。
+        GIF 已预先优化，直接发送无需压缩。
         """
         GALLERY = 3
         if not await self._check_daily_img_limit(gid, needed=GALLERY):
             log.info("GIF_SKIP: gid=%s daily limit reached", gid)
             return
 
-        import shutil
-        import json
-
-        gif_dir = os.path.join(os.path.expanduser("~"), "Desktop", "转发图片", "GIF", src)
-        if not os.path.isdir(gif_dir):
-            log.warning("GIF_DIR_NOT_FOUND: %s", gif_dir)
-            await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
-                {"type": "at", "data": {"qq": int(uid)}},
-                {"type": "text", "data": {"text": f" 没有「{src}」这个 GIF 分类"}},
-            ]})
-            return
-
-        # 1) 收集所有 .gif 文件，按文件名排序（即时间顺序）
-        all_gifs = sorted(
-            f for f in os.listdir(gif_dir)
-            if f.lower().endswith(".gif") and os.path.isfile(os.path.join(gif_dir, f))
-        )
-        if not all_gifs:
-            log.warning("GIF_EMPTY: %s", gif_dir)
-            await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
-                {"type": "at", "data": {"qq": int(uid)}},
-                {"type": "text", "data": {"text": f"「{src}」里还没有 GIF"}},
-            ]})
-            return
-
-        # 2) 加载已发送录（复用 pick_fwd_state.json）
-        state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                  "tc", ".pick_fwd_state.json")
-        state = {}
-        try:
-            if os.path.isfile(state_path):
-                with open(state_path, "r", encoding="utf-8") as f:
-                    state = json.load(f)
-        except Exception:
-            pass
-
-        state_key = f"src_gif_{src}"
-        sent = set(state.get(state_key, []))
-
-        # 3) 筛选未发送
-        unsent = [f for f in all_gifs if f not in sent]
-
-        # 4) 剩余不足 GALLERY → 自动重置
-        if len(unsent) < GALLERY:
-            log.info("GIF_RESET: gid=%s src=%s all=%d unsent=%d reset",
-                     gid, src, len(all_gifs), len(unsent))
-            unsent = all_gifs[:]
-            sent = set()
-
-        # 5) 取 GALLERY 张（顺序窗口，随机起点）
-        if len(unsent) < GALLERY:
-            picks = unsent[:]
-        else:
-            import random
-            start = random.randint(0, len(unsent) - GALLERY)
-            picks = unsent[start:start + GALLERY]
-
-        # 6) 逐张发送 + 成功后才标记已发送
-        #    注：state 保存在 _send_gif_seq 内（发送确认后），不再提前存
         tc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tc", "1")
         os.makedirs(tc_dir, exist_ok=True)
+        pick_script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "tc", "pick_fwd_image.py")
         batch_script = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "tc", "send_images_batch.py")
 
-        async def _send_gif_seq():
-            sent_ok = 0
-            sent_files = []
-            for fname in picks:
-                src_path = os.path.join(gif_dir, fname)
-                dst = os.path.join(tc_dir, fname)
-                try:
-                    shutil.copy2(src_path, dst)
-                except OSError as e:
-                    log.warning("GIF_COPY_ERR: %s", str(e)[:80])
-                    continue
-                url = f"http://127.0.0.1:{IMG_PORT}/1/{fname}"
-                cmd = [sys.executable, batch_script, "--group", str(gid), "--urls", url]
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd, stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE)
-                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
-                    if stdout:
-                        log.info("GIF_SEND_RESULT: gid=%s fname=%s out=%s",
-                                 gid, fname, stdout.decode("utf-8", errors="replace")[:200])
-                    if stderr:
-                        log.warning("GIF_SEND_STDERR: gid=%s fname=%s err=%s",
-                                    gid, fname, stderr.decode("utf-8", errors="replace")[:200])
-                    log.info("GIF_SEND_ONE_OK: gid=%s fname=%s", gid, fname)
-                    sent_ok += 1
-                    sent_files.append(fname)
-                    if sent_ok < len(picks):
-                        await asyncio.sleep(1)  # 每张间隔1秒
-                except Exception as e2:
-                    log.error("GIF_SEND_ONE_ERR: gid=%s fname=%s err=%s",
-                              gid, fname, str(e2)[:80])
-                    break  # 发送失败，不再继续发后面的
+        # 1) 选图 — 与发图共用 pick_fwd_image.py
+        cmd = [sys.executable, pick_script, str(GALLERY), "--mode", self._pick_mode, "--skip", str(self._pick_skip),
+               "--gif", "--src", f"GIF/{src}"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+            paths = [p.strip() for p in stdout.decode("utf-8").split("\n") if p.strip()]
+        except Exception as e:
+            log.error("GIF_PICK_ERR: gid=%s src=%s err=%s", gid, src, str(e)[:80])
+            return
 
-            if sent_ok > 0:
-                # ★ 发送成功后，再保存已发送录（只标记实际发成功的文件）
-                try:
-                    current_state = {}
-                    if os.path.isfile(state_path):
-                        with open(state_path, "r", encoding="utf-8") as f:
-                            current_state = json.load(f)
-                except Exception:
-                    current_state = {}
-                current_sent = set(current_state.get(state_key, []))
-                current_state[state_key] = list(current_sent.union(sent_files))
-                try:
-                    with open(state_path, "w", encoding="utf-8") as f:
-                        json.dump(current_state, f, ensure_ascii=False, indent=2)
-                except Exception:
-                    pass
+        if not paths:
+            log.warning("GIF: no gifs picked for gid=%s src=%s", gid, src)
+            await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                {"type": "at", "data": {"qq": int(uid)}},
+                {"type": "text", "data": {"text": f" 「{src}」里还没有 GIF 了"}},
+            ]})
+            return
 
-                self._incr_daily_img_usage(gid, sent_ok)
-                log.info("GIF_DONE: gid=%s src=%s sent=%d/%d total=%d",
-                         gid, src, sent_ok, len(picks), len(all_gifs))
+        log.info("GIF_PICKED: gid=%s src=%s mode=%s skip=%d count=%d paths=[%s]",
+                 gid, src, self._pick_mode, self._pick_skip, len(paths),
+                 "|".join(os.path.basename(p) for p in paths[:GALLERY]))
 
-        await self.send_queue.put(_send_gif_seq())
+        # 2) 复制到临时目录，准备 URL
+        urls = []
+        for img_path in paths:
+            ext = os.path.splitext(img_path)[1].lower()
+            fname = f"{uuid.uuid4().hex}{ext}"
+            dst = os.path.join(tc_dir, fname)
+            try:
+                shutil.copy2(img_path, dst)
+            except OSError as e:
+                log.warning("GIF_COPY_ERR: %s", str(e)[:80])
+                continue
+            urls.append(f"http://127.0.0.1:{IMG_PORT}/1/{fname}")
+
+        if not urls:
+            log.warning("GIF: all copies failed for gid=%s src=%s", gid, src)
+            return
+
+        # 3) 批量发送 — 一次 WS 连接发所有 GIF（与发图一致）
+        url_str = ",".join(urls)
+        cmd_send = [sys.executable, batch_script, "--group", str(gid), "--urls", url_str]
+
+        async def _send_batch(c=cmd_send, total=len(urls)):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *c, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                if stdout:
+                    log.info("GIF_SEND_RESULT: gid=%s out=%s",
+                             gid, stdout.decode("utf-8", errors="replace")[:200])
+                if stderr:
+                    log.warning("GIF_SEND_STDERR: gid=%s err=%s",
+                                gid, stderr.decode("utf-8", errors="replace")[:200])
+                if proc.returncode != 0:
+                    log.error("GIF_SEND_FAIL: gid=%s retcode=%d", gid, proc.returncode)
+                    return
+                log.info("GIF_SEND_OK: gid=%s src=%s sent=%d/%d", gid, src, total, GALLERY)
+                self._incr_daily_img_usage(gid, total)
+            except Exception as e2:
+                log.error("GIF_SEND_ERR: gid=%s err=%s", gid, str(e2)[:80])
+
+        await self.send_queue.put(_send_batch())
+
+    # ─── 色图规则说明（转发消息包裹） ─────────────────
+
+    async def _handle_rules(self, gid, uid):
+        """处理"色图规则" - 返回当前存图发图逻辑说明，包裹在转发消息中防止刷屏"""
+        nodes = []
+
+        # ── Node 1: 发图规则 ──
+        send_lines = []
+        send_lines.append(f"📤 发图规则")
+        send_lines.append("")
+        send_lines.append(f"选图模式：{PICK_MODE}")
+        send_lines.append("")
+        send_lines.append("📁 可用文件夹：")
+
+        for name, aliases in self._get_available_srcs():
+            depth = name.count("/")
+            prefix = "  " * depth
+            line = f"{prefix}• {name}"
+            if aliases:
+                line += f"（{'/'.join(aliases)}）"
+            send_lines.append(line)
+
+        send_lines.append("")
+        send_lines.append("触发方式：")
+        send_lines.append("• 发送「色图」/「涩图」→ 全文件夹盲抽10张")
+        send_lines.append("• 发送「色图列表」→ 查看可用文件夹")
+        send_lines.append("• 直接发送文件夹名（如：萝莉、脚）→ 指定文件夹发图")
+        send_lines.append("• 发送「gif <分类>」→ 随机发3张GIF")
+
+        nodes.append({
+            "type": "node",
+            "data": {
+                "name": "灰风",
+                "uin": self.self_id or "0",
+                "content": [{"type": "text", "data": {"text": "\n".join(send_lines)}}],
+            }
+        })
+
+        # ── Node 2: 存图规则 ──
+        save_lines = []
+        save_lines.append(f"📥 存图规则")
+        save_lines.append("")
+        save_lines.append("触发方式：")
+        save_lines.append("• 发送「存到<分类>」→ 保存到指定分类文件夹")
+        save_lines.append("• 发送「收图」/「存图」/「收了」→ 保存到「其他」文件夹")
+        save_lines.append("• 发送「全存」/「都存了」→ 全部保存")
+        save_lines.append("")
+        save_lines.append("保存路径：桌面/转发图片/<分类>/")
+        save_lines.append("")
+        save_lines.append("自动分类：")
+        save_lines.append("• 静图 → 直接存到分类文件夹")
+        save_lines.append("• GIF → 自动分到 GIF/<分类>/")
+        save_lines.append("• MP4 → 自动分到 视频/<分类>/")
+        save_lines.append("")
+        save_lines.append("自动压缩：超过500KB的图片自动压缩（GIF除外）")
+
+        nodes.append({
+            "type": "node",
+            "data": {
+                "name": "灰风",
+                "uin": self.self_id or "0",
+                "content": [{"type": "text", "data": {"text": "\n".join(save_lines)}}],
+            }
+        })
+
+        log.info("SE_TU_RULES_SEND: gid=%s nodes=%d", gid, len(nodes))
+        # 用 req 而不是 _enqueue_send，因为 forward_msg 不属于限速队列要等一条条发
+        # 但为了避免混乱，仍然通过 send_queue 发送
+        await self.send_queue.put(
+            self.req("send_group_forward_msg", {
+                "group_id": int(gid),
+                "messages": nodes,
+            })
+        )
 
     # ─── 热加载配置 ────────────────────────────────────
 
@@ -1079,6 +1197,8 @@ class Bot:
         self._admin_uids = cfg.get("admin_uids", [])
         self._forbidden_ops = cfg.get("forbidden_ops", [])
         self._gen_img_cfg = cfg.get("gen_img", {})
+        self._pick_mode = cfg.get("pick_mode", "random")
+        self._pick_skip = cfg.get("pick_skip", 0)
 
         # 处理 auto_se_tu 定时器变化
         new_se_tu = {gid for gid, gc in self._group_configs.items() if gc.get("auto_se_tu")}
@@ -1298,7 +1418,7 @@ class Bot:
             pass  # 由 pick_fwd_image.py 扫描所有子文件夹合并选图
 
         images_to_send = []
-        cmd = [sys.executable, pick_script, str(count)]
+        cmd = [sys.executable, pick_script, str(count), "--mode", PICK_MODE]
         if src:
             cmd += ["--src", src]
         try:
@@ -1397,6 +1517,7 @@ class Bot:
                 pass
 
         saved = 0
+        dedup_skipped = 0
         cached = ref.cached_paths or []
 
         if not cached:
@@ -1412,56 +1533,154 @@ class Bot:
 
         os.makedirs(fwd_dir, exist_ok=True)
 
-        # 扫描所有目录（静图 + GIF + 视频）的已有序号，共用编号序列
-        max_nnn = 0
-        for dir_to_check in (target_dir, gif_target_dir, video_target_dir):
-            try:
-                for existing in os.listdir(dir_to_check):
-                    m = re.match(r'^\d{8}_\d{6}_(\d{3})\.\w+$', existing)
-                    if m:
-                        n = int(m.group(1))
-                        if n > max_nnn:
-                            max_nnn = n
-            except OSError:
-                pass
-        next_nnn = max_nnn + 1
-        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        from datetime import datetime as _dt
+        import imagehash
+        from PIL import Image
+
+        # 重新加载去重库内存缓存（config_web 的一键去重可能刚更新了 DB）
+        self.dedup.reload()
 
         for src_path in cached:
             if not os.path.isfile(src_path):
                 continue
-            ext = os.path.splitext(src_path)[1] or ".jpg"
-            # 按文件类型路由到对应目录
-            if ext.lower() == ".gif":
+            ext = os.path.splitext(src_path)[1].lower()
+
+            # ── GIF：不压缩，只读第一帧做 phash 去重 ──
+            if ext == ".gif":
                 dst_dir = gif_target_dir
-            elif ext.lower() == ".mp4":
+                os.makedirs(dst_dir, exist_ok=True)
+                try:
+                    gif_hash = self.dedup.compute_hash(src_path)
+                    if gif_hash is not None:
+                        is_dup, _ = self.dedup.is_duplicate_by_hash(gif_hash)
+                        if is_dup:
+                            dedup_skipped += 1
+                            log.info("SAVE_IMG_DEDUP_SKIP: gif hash match, %s", os.path.basename(src_path))
+                            continue
+                except Exception:
+                    pass  # hash 失败也继续存
+                mtime = self._src_mtime(src_path)
+                ts = _dt.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
+                seq = 1
+                while True:
+                    fname = f"{ts}_{seq:03d}{ext}"
+                    dst = os.path.join(dst_dir, fname)
+                    if not os.path.exists(dst):
+                        break
+                    seq += 1
+                try:
+                    shutil.copy2(src_path, dst)
+                    saved += 1
+                    if gif_hash is not None:
+                        self.dedup.record(dst, gif_hash)
+                except Exception as e:
+                    log.warning("SAVE_IMG_GIF_ERR: %s", str(e)[:80])
+                continue
+
+            # ── MP4：跳过去重，直接存 ──
+            if ext == ".mp4":
                 dst_dir = video_target_dir
-            else:
-                dst_dir = target_dir
+                os.makedirs(dst_dir, exist_ok=True)
+                mtime = self._src_mtime(src_path)
+                ts = _dt.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
+                seq = 1
+                while True:
+                    fname = f"{ts}_{seq:03d}{ext}"
+                    dst = os.path.join(dst_dir, fname)
+                    if not os.path.exists(dst):
+                        break
+                    seq += 1
+                try:
+                    shutil.copy2(src_path, dst)
+                    saved += 1
+                except Exception as e:
+                    log.warning("SAVE_IMG_MP4_ERR: %s", str(e)[:80])
+                continue
+
+            # ── 图片（jpg/png/webp 等）：压缩 → phash → 去重 → 存 ──
+            dst_dir = target_dir
             os.makedirs(dst_dir, exist_ok=True)
-            # 以标准化命名 YYYYMMDD_HHmmss_NNN.ext 存图（覆盖一键重命名功能）
-            fname = f"{now_str}_{next_nnn:03d}{ext}"
-            dst = os.path.join(dst_dir, fname)
-            next_nnn += 1
+
+            # 先捕获原始 mtime（压缩可能替换文件）
+            mtime = self._src_mtime(src_path)
+
+            # 压缩：>500KB 归一化为 JPG，≤500KB 原样返回
+            compressed = compress_image(src_path)
+
+            # 计算 phash
+            img_hash = None
             try:
-                shutil.copy2(src_path, dst)
+                pil_img = Image.open(compressed)
+                img_hash = imagehash.phash(pil_img)
+                pil_img.close()
+            except Exception as _he:
+                log.info("SAVE_IMG_HASH_ERR: %s %s", os.path.basename(compressed), str(_he)[:60])
+
+            # 去重检查（hash 有效时才查）
+            if img_hash is not None:
+                is_dup, _ = self.dedup.is_duplicate_by_hash(img_hash)
+                if is_dup:
+                    dedup_skipped += 1
+                    log.info("SAVE_IMG_DEDUP_SKIP: hash match, %s", os.path.basename(src_path))
+                    # 清理压缩产生的临时文件
+                    if compressed != src_path and os.path.isfile(compressed):
+                        try:
+                            os.remove(compressed)
+                        except Exception:
+                            pass
+                    continue
+
+            # 用压缩后文件的扩展名
+            actual_ext = os.path.splitext(compressed)[1] or ".jpg"
+            ts = _dt.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
+            seq = 1
+            while True:
+                fname = f"{ts}_{seq:03d}{actual_ext}"
+                dst = os.path.join(dst_dir, fname)
+                if not os.path.exists(dst):
+                    break
+                seq += 1
+
+            try:
+                shutil.copy2(compressed, dst)
                 saved += 1
+                if img_hash is not None:
+                    self.dedup.record(dst, img_hash)
             except Exception as e:
                 log.warning("SAVE_IMG_ERR: %s", str(e)[:80])
 
+        # ── 嘲讽池 ──
+        _mock_pool = [
+            "废物老资源一直发有没有意思",
+            "翻来覆去就这几张是吧",
+            "能不能来点新的 存图的都看吐了",
+            "典 又是这张 你硬盘里是不是就这点东西",
+            "重复率这么高 你搁这刷屏呢",
+            "又来？这图我都见过八回了",
+            "有没有新货啊 老哥",
+            "你发得不腻我看得都腻了",
+            "今日存图 昨日重现",
+        ]
+        _all_dup_mock = [
+            "全是发过的 你是复读机吗",
+            "一张新的都没有 走了",
+            "建议买个新硬盘 你这存量太丢人了",
+            "零新图 零分 下次别叫我了",
+        ]
+        import random as _r
+
         if saved > 0:
-            log.info("SAVE_IMG: saved %d to %s", saved, save_to)
-            reply = f"已存到「{save_to}」{saved}张 ✅"
-            # 后台触发扫描器，压缩 >500KB 的图片（GIF 不会被压缩）
-            t = threading.Thread(
-                target=_trigger_compress,
-                args=([fwd_dir], MAX_IMAGE_SIZE),
-                daemon=True,
-            )
-            t.start()
+            log.info("SAVE_IMG: saved %d to %s (dedup_skipped=%d)", saved, save_to, dedup_skipped)
+            parts = [f"已存到「{save_to}」{saved}张 ✅"]
+            if dedup_skipped > 0:
+                parts.append(f"（{dedup_skipped}张重复已跳过）")
+                parts.append("💬 " + _r.choice(_mock_pool))
+            reply = " ".join(parts)
         else:
             log.info("SAVE_IMG: no images to save, gid=%s uid=%s save_to=%s", gid, uid, save_to)
             reply = "没有可存的图片"
+            if dedup_skipped > 0:
+                reply = f"全部是重复图片（{dedup_skipped}张已跳过）💬 {_r.choice(_all_dup_mock)}"
 
         log.info("SAVE_IMG_REPLY: gid=%s uid=%s reply=%s", gid, uid, reply)
         segs = []
@@ -1470,6 +1689,14 @@ class Bot:
         segs.append({"type": "text", "data": {"text": reply}})
         await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": segs})
         log.info("SAVE_IMG_DONE: gid=%s saved=%d target=%s", gid, saved, save_to)
+
+    @staticmethod
+    def _src_mtime(src_path):
+        """安全获取文件修改时间。"""
+        try:
+            return os.path.getmtime(src_path)
+        except OSError:
+            return time.time()
 
     async def _handle_add_group(self, gid, uid):
         """管理员添加群到白名单"""
@@ -1503,6 +1730,8 @@ class Bot:
 
     async def _handle_cmd(self, gid, uid, text, at_bot):
         cmd = text.strip().split()[0].lower()
+        parts = text.strip().split(maxsplit=1)
+        cmd_args = parts[1].strip() if len(parts) > 1 else ""
 
         if gid in self.context:
             del self.context[gid]
@@ -1517,6 +1746,44 @@ class Bot:
         # /add — 管理员将当前群加入白名单（已白名单的群里的快捷方式）
         if cmd == "/add" and str(uid) in (getattr(self, '_admin_uids', ADMIN_UIDS)):
             await self._handle_add_group(gid, uid)
+            return
+
+        # /选图 <模式> — 切换选图模式并热加载
+        if cmd == "/选图" and cmd_args:
+            mode_map = {
+                "纯随机": "shuffle",
+                "shuffle": "shuffle",
+                "最新优先": "newest",
+                "newest": "newest",
+                "随机顺序": "random",
+                "随机顺序窗": "random",
+                "random": "random",
+            }
+            new_mode = mode_map.get(cmd_args)
+            if new_mode:
+                cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+                try:
+                    import yaml
+                    with open(cfg_path, "r", encoding="utf-8") as f:
+                        cfg = yaml.safe_load(f) or {}
+                    cfg["pick_mode"] = new_mode
+                    with open(cfg_path, "w", encoding="utf-8") as f:
+                        yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False, indent=2, width=120)
+                    self._reload_config()
+                    log.info("CMD_PICK_MODE: gid=%s uid=%s mode=%s", gid, uid, new_mode)
+                    await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                        {"type": "text", "data": {"text": f" 已切换选图模式为「{cmd_args}」"}},
+                    ]})
+                except Exception as e:
+                    log.error("CMD_PICK_MODE_ERR: %s", str(e)[:80])
+                    await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                        {"type": "text", "data": {"text": " 切换失败，请重试"}},
+                    ]})
+            else:
+                await self._enqueue_send("send_group_msg", {"group_id": int(gid), "message": [
+                    {"type": "at", "data": {"qq": int(uid)}},
+                    {"type": "text", "data": {"text": " 可用模式: 纯随机 / 最新优先 / 随机顺序"}},
+                ]})
             return
 
         prompts = getattr(self, '_group_configs', GROUP_PROMPTS)

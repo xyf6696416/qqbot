@@ -34,7 +34,7 @@ class IntentRouter:
     SEND_IMG += [r"发出来|发到群里"]
 
     SAVE_IMG = [r"存图|保存|存起来|存一下|存这张|收图|收藏|收了"]
-    SAVE_IMG += [r"(?<!缓)存到\w+|保存到\w+"]
+    SAVE_IMG += [r"(?<!缓)存到\w+|保存到\w+|存入\w+"]
     SAVE_IMG += [r"全存|全部存|都存了"]
     SAVE_IMG += [r"第\d+张存|第\d+张保存"]
 
@@ -137,8 +137,17 @@ class IntentRouter:
 
     @staticmethod
     def extract_save_to(text):
-        m = re.search(r"(?<!缓)(?:存到|保存到)\s*(\w+)", text)
-        return m.group(1) if m else None
+        m = re.search(r"(?<!缓)(?:存到|保存到|存入)\s*(\w+)", text)
+        if not m:
+            return None
+        name = m.group(1)
+        # 截掉末尾的触发词（如 "泡泡"）
+        from config import TRIGGER_KW
+        for kw in sorted(TRIGGER_KW, key=len, reverse=True):
+            if name.endswith(kw) and len(name) > len(kw):
+                name = name[:-len(kw)]
+                break
+        return name or None
 
     @staticmethod
     def extract_nth(text):

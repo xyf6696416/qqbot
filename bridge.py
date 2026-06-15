@@ -36,6 +36,10 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
+    handlers=[
+        logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge_test.log"), encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
 )
 log = logging.getLogger("gw")
 logging.getLogger("httpx").setLevel(logging.WARNING)
