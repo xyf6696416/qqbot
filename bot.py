@@ -1322,47 +1322,15 @@ class Bot:
     # ─── 意图路由 ──────────────────────────────────────
 
     async def _route_intent(self, text, has_image=False, has_ref_image=False, has_ref_forward=False):
+        """关键词意图路由，低置信度直接走 chat，不再调用 SF 兜底。"""
         result = IntentRouter.keyword_route(text, has_image, has_ref_image, has_ref_forward)
-
+        # gen_img 保持关键词直接返回
         if result["intent"] == "gen_img":
-            # /st 是主动触发，不经过 SF 二次分类
-            return {"intent": "gen_img", "confidence": "keyword", "params": result["params"]}
-
-        if result["confidence"] == "high":
             return result
-
+        # 低置信度兜底为 chat（正常对话）
         if result["confidence"] == "low":
-            sf_intent = await self._sf_route(text, has_image, has_ref_image, has_ref_forward)
-            if sf_intent:
-                return {"intent": sf_intent, "confidence": "sf", "params": result["params"]}
-
+            return {"intent": "chat", "confidence": "fallback", "params": {}}
         return result
-
-    async def _sf_route(self, text, has_image, has_ref_image, has_ref_forward):
-        prompt = (
-            "你是QQ群聊消息的意图分类器。"
-            "只输出一个词： vision save_img send_img gen_img chat\n"
-            f"消息属性：含图片={has_image} 引用图片={has_ref_image} 引用转发={has_ref_forward}"
-        )
-        try:
-            r = await self._sf_client.post(
-                "https://api.siliconflow.cn/v1/chat/completions",
-                json={
-                    "model": "Qwen/Qwen2.5-7B-Instruct",
-                    "messages": [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": text},
-                    ],
-                    "max_tokens": 5,
-                    "temperature": 0.1,
-                }, headers={"Authorization": f"Bearer {SF_KEY}"})
-            result = r.json()["choices"][0]["message"]["content"].strip()
-            if result in ("vision", "save_img", "send_img", "gen_img", "chat"):
-                log.info("SF_ROUTE: %s -> %s", text[:30], result)
-                return result
-        except Exception as e:
-            log.warning("SF_ROUTE_ERR: %s", str(e)[:100])
-        return None
 
     # ─── 意图处理器 ────────────────────────────────────
 
