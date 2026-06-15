@@ -93,7 +93,7 @@ Bot._handle_group(data)
 Bot._process_queue_item(item)
     │  ├─ 命令处理（/clear /add /选图）
     │  ├─ 色图直发 / GIF / 文件夹直发
-    │  ├─ 意图路由（IntentRouter.keyword_route + SF fallback）
+    │  ├─ 意图路由（IntentRouter.keyword_route）
     │  └─ 分发到具体 handler
     │      ├─ _handle_chat()       → SiliconFlow Chat
     │      ├─ _handle_vision()     → SiliconFlow VL + Chat

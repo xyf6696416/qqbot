@@ -32,7 +32,7 @@ napcat-greywind/
 ├── config.py            # 配置加载（从 config.yaml 读取）
 ├── config.yaml          # 群聊配置（群号/prompt/trigger/生图等）
 ├── config_web.py        # Web 配置管理面板（Flask, 端口 7788）
-├── intent_router.py     # 意图路由 + 参数提取（关键词 + SF 兜底）
+├── intent_router.py     # 意图路由 + 参数提取（关键词）
 ├── image_utils.py       # 图片压缩 + 图床管理（ImageServer）
 ├── image_compressor.py  # 后台图片压缩调度器（定时扫描 >500KB 图片）
 ├── image_dedup.py       # 图片去重模块（基于 phash，SQLite 存储）
@@ -99,7 +99,6 @@ start_config_web.bat
 
 ### 2. 意图路由（`intent_router.py`）
 - `IntentRouter.keyword_route()` 按优先级匹配：save_img > send_img > gen_img > vision > chat
-- 低置信度走 SiliconFlow Qwen2.5-7B 兜底分类
 - SRC_MAP 映射发图关键词到 `桌面\转发图片\` 子文件夹
 - 不指定 src 时选图脚本自动从所有文件夹选图
 
@@ -262,7 +261,6 @@ netstat -ano | findstr 7788     # 配置面板
 ### 2026-06-03 (v6.1)
 - 引用的单图路由、图片压缩、识图修复、auto-clear 修复、/ 命令触发修复
 - 意图路由（IntentRouter 类）、提示词拆分、处理器拆分
-- SF 兜底、SSH 修复
 
 ### 2026-06-02
 - 转发图片仅 @时保存、嵌套转发检测、文件名格式修改

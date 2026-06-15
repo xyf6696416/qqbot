@@ -1322,7 +1322,7 @@ class Bot:
     # ─── 意图路由 ──────────────────────────────────────
 
     async def _route_intent(self, text, has_image=False, has_ref_image=False, has_ref_forward=False):
-        """关键词意图路由，低置信度直接走 chat，不再调用 SF 兜底。"""
+        """关键词意图路由，低置信度直接走 chat。"""
         result = IntentRouter.keyword_route(text, has_image, has_ref_image, has_ref_forward)
         # gen_img 保持关键词直接返回
         if result["intent"] == "gen_img":

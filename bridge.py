@@ -1,7 +1,7 @@
 """
 GreyWind x NapCat Bridge v6.3
 =============================
-- Intent routing (keyword + SF fallback)
+- Intent routing (keyword → chat fallback)
 - Reference caching before routing
 - Per-intent prompt splitting
 - Group message context (max 200)
